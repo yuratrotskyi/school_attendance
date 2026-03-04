@@ -4,6 +4,7 @@ from pathlib import Path
 
 from school_attendance.collector import (
     _collect_paginated_links,
+    _is_journal_href,
     _normalize_journal_rows,
     _write_journal_records_csv,
 )
@@ -92,6 +93,13 @@ class TestCollectorJournalRecords(unittest.TestCase):
             ],
             got,
         )
+
+    def test_recognizes_journal_links_with_query_id_format(self):
+        self.assertTrue(_is_journal_href("/journal?id=123"))
+        self.assertTrue(_is_journal_href("https://nz.ua/journal?id=777"))
+        self.assertTrue(_is_journal_href("/journal/entry/42"))
+        self.assertFalse(_is_journal_href("/journal/list"))
+        self.assertFalse(_is_journal_href("https://nz.ua/account/profile"))
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

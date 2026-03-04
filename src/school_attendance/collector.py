@@ -99,7 +99,10 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         list_cfg=journal_cfg,
     )
     if not journal_urls:
-        raise CollectorError("No journal links found on /journal/list. Update selectors config.")
+        raise CollectorError(
+            "No journal links found on /journal/list. "
+            "Update config.journal_list.link_selector to match your account page."
+        )
 
     all_records: List[Dict[str, Any]] = []
     for journal_url in journal_urls:
@@ -154,18 +157,33 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
     links: List[str] = []
     locator = page.locator(link_selector)
     count = locator.count()
+    if count == 0 and link_selector != "a":
+        locator = page.locator("a")
+        count = locator.count()
 
     for idx in range(count):
-        href = (locator.nth(idx).get_attribute("href") or "").strip()
-        if not href:
+        node = locator.nth(idx)
+        href = (node.get_attribute("href") or "").strip()
+        if _is_journal_href(href):
+            links.append(href)
             continue
-        if "/journal/list" in href:
-            continue
-        if "/journal/" not in href:
-            continue
-        links.append(href)
+
+        data_href = (node.get_attribute("data-href") or node.get_attribute("data-url") or "").strip()
+        if _is_journal_href(data_href):
+            links.append(data_href)
 
     return links
+
+
+def _is_journal_href(href: str) -> bool:
+    text = (href or "").strip()
+    if not text:
+        return False
+
+    normalized = text.lower()
+    if "/journal/list" in normalized:
+        return False
+    return "/journal/" in normalized or "/journal?" in normalized
 
 
 def _collect_single_journal_records(page: Any, journal_url: str, base_url: str, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:

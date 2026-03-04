@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from datetime import date
 from pathlib import Path
+import shutil
 from typing import Dict, Iterable, List, Optional
 
 from .analytics import build_period_summary, build_student_risk_list, detect_escape_incidents
@@ -29,10 +30,10 @@ def run_daily(
     run_proc_dir = config.data_dir / "processed" / run_date.isoformat()
     run_out_dir = config.out_dir / run_date.isoformat()
 
-    run_raw_dir.mkdir(parents=True, exist_ok=True)
-    run_norm_dir.mkdir(parents=True, exist_ok=True)
-    run_proc_dir.mkdir(parents=True, exist_ok=True)
-    run_out_dir.mkdir(parents=True, exist_ok=True)
+    _reset_run_directory(run_raw_dir)
+    _reset_run_directory(run_norm_dir)
+    _reset_run_directory(run_proc_dir)
+    _reset_run_directory(run_out_dir)
 
     files: List[Path] = [Path(p) for p in raw_files] if raw_files else []
 
@@ -102,6 +103,15 @@ def _write_normalized_csv(path: Path, records: Iterable[AttendanceRecord]) -> No
                     "reason_code": row.reason_code,
                 }
             )
+
+
+def _reset_run_directory(path: Path) -> None:
+    if path.exists():
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    path.mkdir(parents=True, exist_ok=True)
 
 
 def _write_incidents_csv(path: Path, incidents: Iterable[Dict[str, object]]) -> None:
