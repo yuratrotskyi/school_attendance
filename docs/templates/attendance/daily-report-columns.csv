@@ -1,0 +1,2 @@
+student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident
+12345,"Іваненко Іван",7-А,2026-03-05,5,"ABSENT","UNEXCUSED",true
