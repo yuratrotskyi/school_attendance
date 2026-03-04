@@ -4,10 +4,13 @@ from pathlib import Path
 
 from school_attendance.collector import (
     _collect_paginated_links,
+    _extract_dates_from_topics,
     _extract_candidate_journal_hrefs,
     _is_journal_href,
     _looks_like_class_chip_label,
     _normalize_journal_rows,
+    _pick_next_pagination_href,
+    _resolve_date_from_day_and_month,
     _write_journal_records_csv,
 )
 
@@ -126,6 +129,43 @@ class TestCollectorJournalRecords(unittest.TestCase):
         self.assertTrue(_looks_like_class_chip_label("7-A"))
         self.assertFalse(_looks_like_class_chip_label("Оберіть журнал"))
         self.assertFalse(_looks_like_class_chip_label("Зведені звіти"))
+
+    def test_resolve_date_from_day_and_month_for_cross_year_semester(self):
+        semester = ("2025-09-01", "2026-06-05")
+
+        jan_date = _resolve_date_from_day_and_month("12", "Січ.", semester)
+        nov_date = _resolve_date_from_day_and_month("16", "Лист.", semester)
+
+        self.assertEqual("2026-01-12", jan_date)
+        self.assertEqual("2025-11-16", nov_date)
+
+    def test_extract_dates_from_topics_parses_ukrainian_months(self):
+        topics = [
+            {"date_text": "12 січня", "lesson_no": "16"},
+            {"date_text": "19 лютого", "lesson_no": "20"},
+        ]
+
+        got = _extract_dates_from_topics(topics, ("2025-09-01", "2026-06-05"))
+
+        self.assertEqual(
+            [
+                {"date": "2026-01-12", "lesson_no": 16},
+                {"date": "2026-02-19", "lesson_no": 20},
+            ],
+            got,
+        )
+
+    def test_pick_next_pagination_href_prefers_new_page(self):
+        current = "https://nz.ua/journal?id=123&page=1"
+        links = [
+            "https://nz.ua/journal?id=123&page=1",
+            "/journal?id=123&page=2",
+            "/journal?id=123&page=3",
+        ]
+
+        next_href = _pick_next_pagination_href(current_url=current, hrefs=links, base_url="https://nz.ua")
+
+        self.assertEqual("https://nz.ua/journal?id=123&page=2", next_href)
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

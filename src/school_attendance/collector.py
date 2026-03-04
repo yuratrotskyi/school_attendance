@@ -18,6 +18,22 @@ class CollectorError(RuntimeError):
     """Raised when collection could not be completed."""
 
 
+_UK_MONTH_MAP = {
+    "січ": 1,
+    "лют": 2,
+    "бер": 3,
+    "квіт": 4,
+    "трав": 5,
+    "черв": 6,
+    "лип": 7,
+    "серп": 8,
+    "вер": 9,
+    "жовт": 10,
+    "лист": 11,
+    "груд": 12,
+}
+
+
 def _build_context_kwargs(config: AppConfig) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {"accept_downloads": True}
     if config.session_state_path.exists():
@@ -665,7 +681,292 @@ def _extract_rows_from_dom(page: Any, page_cfg: Dict[str, Any], class_name_hint:
                 }
             )
 
+    if rows:
+        return rows
+
+    return _extract_rows_from_dom_grid(page=page, class_name_hint=class_name_hint)
+
+
+def _extract_rows_from_dom_grid(page: Any, class_name_hint: str) -> List[Dict[str, Any]]:
+    payload = _extract_attendance_grid_payload(page)
+    if not payload:
+        return []
+
+    day_headers = payload.get("day_headers", [])
+    month_headers = payload.get("month_headers", [])
+    body_rows = payload.get("rows", [])
+    name_col_idx = _to_int(payload.get("name_col_idx"))
+    if name_col_idx is None:
+        name_col_idx = 1
+
+    semester_bounds = _extract_semester_bounds_from_text(payload.get("page_text", ""))
+    topics_dates = _extract_dates_from_topics(payload.get("topic_dates", []), semester_bounds)
+    column_meta = _build_grid_column_meta(
+        day_headers=day_headers,
+        month_headers=month_headers,
+        semester_bounds=semester_bounds,
+        topics_dates=topics_dates,
+    )
+    if not column_meta:
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for cells in body_rows:
+        if not isinstance(cells, list) or name_col_idx >= len(cells):
+            continue
+
+        student_name = str(cells[name_col_idx]).strip()
+        if not student_name or student_name == "ПІБ учня":
+            continue
+
+        student_id = _synthetic_student_id(student_name)
+        for item in column_meta:
+            col_idx = item["col_idx"]
+            if col_idx >= len(cells):
+                continue
+            rows.append(
+                {
+                    "student_id": student_id,
+                    "student_name": student_name,
+                    "class_name": class_name_hint,
+                    "date": item["date"],
+                    "lesson_no": item["lesson_no"],
+                    "mark": str(cells[col_idx]).strip(),
+                }
+            )
+
     return rows
+
+
+def _extract_attendance_grid_payload(page: Any) -> Optional[Dict[str, Any]]:
+    try:
+        return page.evaluate(
+            """() => {
+                const norm = (v) => (v || '').replace(/\\s+/g, ' ').trim();
+                const tables = Array.from(document.querySelectorAll('table'));
+
+                let best = null;
+                let bestScore = -1;
+                for (const table of tables) {
+                    const text = norm(table.innerText);
+                    let score = 0;
+                    if (text.includes('ПІБ учня')) score += 5;
+                    if (text.includes('№ уроку')) score -= 3;
+                    if ((table.querySelectorAll('tbody tr').length || 0) > 5) score += 1;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = table;
+                    }
+                }
+
+                if (!best || bestScore < 3) {
+                    return null;
+                }
+
+                const headerRows = Array.from(best.querySelectorAll('thead tr'));
+                const dayRow = headerRows.length ? headerRows[headerRows.length - 1] : null;
+                const monthRow = headerRows.length > 1 ? headerRows[0] : null;
+                const dayHeaders = dayRow ? Array.from(dayRow.children).map(c => norm(c.innerText)) : [];
+                const monthHeaders = monthRow
+                    ? Array.from(monthRow.children).map(c => ({ text: norm(c.innerText), span: Number(c.getAttribute('colspan') || 1) }))
+                    : [];
+
+                let nameColIdx = dayHeaders.findIndex(text => text.toLowerCase().includes('піб'));
+                if (nameColIdx < 0) {
+                    nameColIdx = 1;
+                }
+
+                const bodyRows = Array.from(best.querySelectorAll('tbody tr'))
+                    .map(row => Array.from(row.children).map(cell => norm(cell.innerText)));
+
+                const topicTable = tables.find(table => {
+                    const text = norm(table.innerText);
+                    return text.includes('Дата') && text.includes('№ уроку') && text.includes('Домаш');
+                });
+
+                let topicDates = [];
+                if (topicTable) {
+                    const headCells = Array.from(topicTable.querySelectorAll('thead tr:last-child th, thead tr:last-child td'))
+                        .map(cell => norm(cell.innerText));
+                    const dateIdx = headCells.findIndex(text => text.toLowerCase().includes('дата'));
+                    const lessonIdx = headCells.findIndex(text => text.toLowerCase().includes('№ урок'));
+
+                    if (dateIdx >= 0) {
+                        topicDates = Array.from(topicTable.querySelectorAll('tbody tr'))
+                            .map(row => Array.from(row.children).map(cell => norm(cell.innerText)))
+                            .map(cells => ({
+                                date_text: cells[dateIdx] || '',
+                                lesson_no: lessonIdx >= 0 ? cells[lessonIdx] || '' : '',
+                            }))
+                            .filter(item => item.date_text);
+                    }
+                }
+
+                return {
+                    day_headers: dayHeaders,
+                    month_headers: monthHeaders,
+                    rows: bodyRows,
+                    name_col_idx: nameColIdx,
+                    topic_dates: topicDates,
+                    page_text: norm(document.body ? document.body.innerText : ''),
+                };
+            }"""
+        )
+    except Exception:
+        return None
+
+
+def _build_grid_column_meta(
+    day_headers: List[Any],
+    month_headers: List[Dict[str, Any]],
+    semester_bounds: Optional[Sequence[str]],
+    topics_dates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    day_tokens = [str(item).strip() for item in day_headers]
+    attendance_col_indexes = [idx for idx, token in enumerate(day_tokens) if _to_int(token) is not None]
+
+    if not attendance_col_indexes:
+        start_idx = 2 if len(day_tokens) > 2 else 0
+        attendance_col_indexes = list(range(start_idx, len(day_tokens)))
+
+    if not attendance_col_indexes:
+        return []
+
+    expanded_months = _expand_month_headers(month_headers, len(day_tokens))
+    meta: List[Dict[str, Any]] = []
+
+    for pos, col_idx in enumerate(attendance_col_indexes):
+        if pos < len(topics_dates):
+            date_iso = topics_dates[pos]["date"]
+            lesson_no = topics_dates[pos]["lesson_no"]
+        else:
+            month_token = expanded_months[col_idx] if col_idx < len(expanded_months) else ""
+            date_iso = _resolve_date_from_day_and_month(day_tokens[col_idx], month_token, semester_bounds)
+            lesson_no = pos + 1
+
+        if not date_iso:
+            continue
+
+        meta.append(
+            {
+                "col_idx": col_idx,
+                "date": date_iso,
+                "lesson_no": lesson_no,
+            }
+        )
+
+    return meta
+
+
+def _expand_month_headers(month_headers: List[Dict[str, Any]], total_columns: int) -> List[str]:
+    expanded: List[str] = []
+    for item in month_headers:
+        text = str(item.get("text", "")).strip()
+        span = _to_int(item.get("span"))
+        if span is None or span <= 0:
+            span = 1
+        expanded.extend([text] * span)
+
+    if len(expanded) < total_columns:
+        last = expanded[-1] if expanded else ""
+        expanded.extend([last] * (total_columns - len(expanded)))
+    elif len(expanded) > total_columns:
+        expanded = expanded[:total_columns]
+
+    return expanded
+
+
+def _extract_semester_bounds_from_text(text: str) -> Optional[Sequence[str]]:
+    token = str(text or "")
+    match = re.search(r"(\d{2}\.\d{2}\.\d{4})\s*[-–]\s*(\d{2}\.\d{2}\.\d{4})", token)
+    if not match:
+        return None
+
+    start = _normalize_date(match.group(1))
+    end = _normalize_date(match.group(2))
+    if not start or not end:
+        return None
+
+    return (start, end)
+
+
+def _extract_dates_from_topics(topics: List[Dict[str, Any]], semester_bounds: Optional[Sequence[str]]) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    for item in topics:
+        date_iso = _normalize_topic_date(item.get("date_text"), semester_bounds)
+        lesson_no = _to_int(item.get("lesson_no"))
+        if not date_iso:
+            continue
+        result.append(
+            {
+                "date": date_iso,
+                "lesson_no": lesson_no if lesson_no is not None else (len(result) + 1),
+            }
+        )
+    return result
+
+
+def _normalize_topic_date(text: Any, semester_bounds: Optional[Sequence[str]]) -> Optional[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    parsed_iso = _normalize_date(raw)
+    if parsed_iso:
+        return parsed_iso
+
+    match = re.search(r"(\d{1,2})\s+([A-Za-zА-Яа-яІіЇїЄєҐґ\.]+)", raw)
+    if not match:
+        return None
+
+    return _resolve_date_from_day_and_month(match.group(1), match.group(2), semester_bounds)
+
+
+def _resolve_date_from_day_and_month(
+    day_token: Any,
+    month_token: Any,
+    semester_bounds: Optional[Sequence[str]],
+) -> Optional[str]:
+    day = _to_int(day_token)
+    month = _month_number_from_token(month_token)
+    if day is None or month is None:
+        return None
+
+    year = _resolve_year_for_month(month=month, semester_bounds=semester_bounds)
+    if year is None:
+        year = datetime.now().year
+
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _month_number_from_token(token: Any) -> Optional[int]:
+    value = str(token or "").strip().lower().replace(".", "")
+    if not value:
+        return None
+    for key, month in _UK_MONTH_MAP.items():
+        if value.startswith(key):
+            return month
+    return None
+
+
+def _resolve_year_for_month(month: int, semester_bounds: Optional[Sequence[str]]) -> Optional[int]:
+    if not semester_bounds or len(semester_bounds) != 2:
+        return None
+
+    start_iso = _normalize_date(semester_bounds[0])
+    end_iso = _normalize_date(semester_bounds[1])
+    if not start_iso or not end_iso:
+        return None
+
+    start_date = datetime.strptime(start_iso, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_iso, "%Y-%m-%d").date()
+
+    if start_date.year == end_date.year:
+        return start_date.year
+    return start_date.year if month >= start_date.month else end_date.year
 
 
 def _extract_class_name(page: Any, page_cfg: Dict[str, Any]) -> str:
@@ -680,17 +981,82 @@ def _extract_class_name(page: Any, page_cfg: Dict[str, Any]) -> str:
 
 def _extract_next_href(page: Any, next_selector: str, current_url: str, base_url: str) -> Optional[str]:
     locator = page.locator(next_selector)
-    if locator.count() == 0:
+    hrefs: List[str] = []
+
+    if locator.count() > 0:
+        for idx in range(locator.count()):
+            href = (locator.nth(idx).get_attribute("href") or "").strip()
+            if href:
+                hrefs.append(href)
+
+    if not hrefs:
+        try:
+            hrefs = page.eval_on_selector_all(
+                ".pagination a, nav a[aria-label*='next'], a[rel='next']",
+                "els => els.map(el => el.getAttribute('href')).filter(Boolean)",
+            )
+        except Exception:
+            hrefs = []
+
+    return _pick_next_pagination_href(current_url=current_url, hrefs=hrefs, base_url=base_url)
+
+
+def _pick_next_pagination_href(current_url: str, hrefs: Iterable[str], base_url: str) -> Optional[str]:
+    normalized_links: List[str] = []
+    seen: set = set()
+    for raw_href in hrefs:
+        url = urljoin(base_url, str(raw_href).strip())
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized_links.append(url)
+
+    if not normalized_links:
         return None
 
-    href = (locator.first.get_attribute("href") or "").strip()
-    if not href:
-        return None
+    current_page = _extract_page_number(current_url)
+    ranked: List[tuple] = []
+    for link in normalized_links:
+        if _urls_equal(link, current_url):
+            continue
+        link_page = _extract_page_number(link)
+        if current_page is not None and link_page is not None and link_page > current_page:
+            ranked.append((link_page, link))
 
-    next_url = urljoin(base_url, href)
-    if next_url == current_url:
-        return None
-    return next_url
+    if ranked:
+        ranked.sort(key=lambda item: item[0])
+        return ranked[0][1]
+
+    for link in normalized_links:
+        if not _urls_equal(link, current_url):
+            return link
+    return None
+
+
+def _urls_equal(first: str, second: str) -> bool:
+    return _canonical_url(first) == _canonical_url(second)
+
+
+def _canonical_url(value: str) -> str:
+    parsed = urlparse(str(value or ""))
+    query_pairs = parse_qs(parsed.query)
+    query_parts = []
+    for key in sorted(query_pairs.keys()):
+        for val in sorted(query_pairs[key]):
+            query_parts.append(f"{key}={val}")
+    query = "&".join(query_parts)
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path}?{query}".rstrip("?")
+
+
+def _extract_page_number(url: str) -> Optional[int]:
+    parsed = urlparse(str(url or ""))
+    query = parse_qs(parsed.query)
+    for key in ("page", "p", "pg"):
+        if key in query and query[key]:
+            page_no = _to_int(query[key][0])
+            if page_no is not None:
+                return page_no
+    return None
 
 
 def _extract_journal_id(journal_url: str) -> str:
