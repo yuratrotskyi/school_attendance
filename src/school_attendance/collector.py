@@ -7,6 +7,7 @@ from datetime import date, datetime
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -46,7 +47,7 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=config.nz_headless)
         context = browser.new_context(**_build_context_kwargs(config))
         page = context.new_page()
 
@@ -57,6 +58,7 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
             raise CollectorError("No attendance records collected from journal pages")
 
         raw_csv = _write_journal_records_csv(run_dir=run_dir, records=records)
+        context.storage_state(path=str(config.session_state_path))
 
         context.close()
         browser.close()
@@ -70,6 +72,7 @@ def _ensure_authenticated(page: Any, config: AppConfig, selector_cfg: Dict[str, 
 
     page.goto(login_url, wait_until="domcontentloaded")
     page.wait_for_timeout(int(selector_cfg.get("pre_login_wait_ms", 1200)))
+    _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="login")
 
     if not _requires_login(page, login_selector, selector_cfg):
         return
@@ -84,6 +87,7 @@ def _ensure_authenticated(page: Any, config: AppConfig, selector_cfg: Dict[str, 
     page.fill(selector_cfg.get("password_selector", 'input[name="password"]'), config.nz_password)
     page.click(selector_cfg.get("submit_selector", 'button[type="submit"]'))
     page.wait_for_timeout(int(selector_cfg.get("post_login_wait_ms", 2500)))
+    _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="post-login")
 
     if _requires_login(page, login_selector, {"open_login_button_selector": None}):
         raise CollectorError("Login to nz.ua failed: login form is still visible after submit")
@@ -98,6 +102,8 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         list_url=list_url,
         base_url=config.base_url,
         list_cfg=journal_cfg,
+        config=config,
+        selector_cfg=selector_cfg,
     )
     if not journal_urls:
         _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem="journal-list-no-links")
@@ -114,6 +120,7 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
                 journal_url=journal_url,
                 base_url=config.base_url,
                 selector_cfg=selector_cfg,
+                config=config,
             )
         except Exception as exc:
             print(f"[collector] Skip journal {journal_url}: {exc}")
@@ -123,7 +130,14 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
     return _deduplicate_normalized_records(all_records)
 
 
-def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Dict[str, Any]) -> List[str]:
+def _collect_journal_links(
+    page: Any,
+    list_url: str,
+    base_url: str,
+    list_cfg: Dict[str, Any],
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[str]:
     link_selector = list_cfg.get("link_selector", 'a[href*="/journal/"]')
     next_selector = list_cfg.get("next_page_selector", ".pagination a[rel='next'], .pagination li.next a")
     wait_ms = int(list_cfg.get("wait_ms", 1300))
@@ -141,13 +155,20 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
 
         page.goto(current_url, wait_until="domcontentloaded")
         page.wait_for_timeout(wait_ms)
+        _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="journal-list")
 
         if _is_journal_href(page.url):
             return _collect_paginated_links(pages=[{"links": [page.url], "next": None}], base_url=base_url)
 
         links = _extract_links_from_page(page=page, link_selector=link_selector, list_url=list_url)
         if not links:
-            discovered = _discover_journal_links_by_click(page=page, list_cfg=list_cfg, list_url=list_url)
+            discovered = _discover_journal_links_by_click(
+                page=page,
+                list_cfg=list_cfg,
+                list_url=list_url,
+                config=config,
+                selector_cfg=selector_cfg,
+            )
             click_discovery_urls.extend(discovered)
 
         next_url = _extract_next_href(
@@ -198,7 +219,13 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
     return _extract_candidate_journal_hrefs(raw_values)
 
 
-def _discover_journal_links_by_click(page: Any, list_cfg: Dict[str, Any], list_url: str) -> List[str]:
+def _discover_journal_links_by_click(
+    page: Any,
+    list_cfg: Dict[str, Any],
+    list_url: str,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[str]:
     chip_selector = list_cfg.get("chip_selector", "table tbody tr td:nth-child(2) *")
     wait_ms = int(list_cfg.get("click_wait_ms", 1500))
     max_clicks = int(list_cfg.get("max_chip_clicks", 200))
@@ -210,6 +237,7 @@ def _discover_journal_links_by_click(page: Any, list_cfg: Dict[str, Any], list_u
         try:
             page.goto(list_url, wait_until="domcontentloaded")
             page.wait_for_timeout(wait_ms)
+            _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="journal-list-click")
         except Exception:
             continue
 
@@ -227,6 +255,7 @@ def _discover_journal_links_by_click(page: Any, list_cfg: Dict[str, Any], list_u
             except Exception:
                 continue
             page.wait_for_timeout(wait_ms)
+        _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="journal-open")
 
         found.extend(_extract_candidate_journal_hrefs([page.url]))
 
@@ -356,7 +385,70 @@ def _write_debug_artifacts(page: Any, logs_dir: Path, stem: str) -> None:
         pass
 
 
-def _collect_single_journal_records(page: Any, journal_url: str, base_url: str, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _is_cloudflare_challenge_title(title: str) -> bool:
+    token = (title or "").strip().lower()
+    return "just a moment" in token or "security verification" in token
+
+
+def _is_cloudflare_challenge_html(html: str) -> bool:
+    token = (html or "").lower()
+    markers = [
+        "cf-turnstile-response",
+        "/cdn-cgi/challenge-platform/",
+        "performing security verification",
+        "just a moment",
+        "verify you are human",
+    ]
+    return any(marker in token for marker in markers)
+
+
+def _is_cloudflare_challenge_page(page: Any) -> bool:
+    try:
+        if _is_cloudflare_challenge_title(page.title()):
+            return True
+    except Exception:
+        pass
+
+    try:
+        return _is_cloudflare_challenge_html(page.content())
+    except Exception:
+        return False
+
+
+def _ensure_not_cloudflare_blocked(page: Any, config: AppConfig, selector_cfg: Dict[str, Any], stage: str) -> None:
+    if not _is_cloudflare_challenge_page(page):
+        return
+
+    wait_seconds = int(selector_cfg.get("cloudflare_wait_seconds", config.cloudflare_wait_seconds))
+    if config.nz_headless:
+        _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem=f"cloudflare-{stage}")
+        raise CollectorError(
+            "Cloudflare verification is blocking automated collection in headless mode. "
+            "Set NZ_HEADLESS=false, run bootstrap-session once, then run-daily again."
+        )
+
+    print("[collector] Cloudflare verification detected. Complete checkbox in opened browser window...")
+    deadline = time.time() + wait_seconds
+
+    while time.time() < deadline:
+        page.wait_for_timeout(1000)
+        if not _is_cloudflare_challenge_page(page):
+            return
+
+    _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem=f"cloudflare-timeout-{stage}")
+    raise CollectorError(
+        f"Cloudflare verification not completed within {wait_seconds}s at stage '{stage}'. "
+        "Open logs/artifacts/cloudflare-timeout-*.html to inspect."
+    )
+
+
+def _collect_single_journal_records(
+    page: Any,
+    journal_url: str,
+    base_url: str,
+    selector_cfg: Dict[str, Any],
+    config: AppConfig,
+) -> List[Dict[str, Any]]:
     page_cfg = selector_cfg.get("journal_page", {})
     next_selector = page_cfg.get("next_page_selector", ".pagination a[rel='next'], .pagination li.next a")
     wait_ms = int(page_cfg.get("wait_ms", 1300))
@@ -376,6 +468,7 @@ def _collect_single_journal_records(page: Any, journal_url: str, base_url: str, 
 
         page.goto(current_url, wait_until="domcontentloaded")
         page.wait_for_timeout(wait_ms)
+        _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="journal-page")
 
         if not class_name_hint:
             class_name_hint = _extract_class_name(page=page, page_cfg=page_cfg)

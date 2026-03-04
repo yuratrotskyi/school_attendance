@@ -6,6 +6,7 @@
   "password_selector": "#loginform-password",
   "submit_selector": "button[name=\"login-button\"]",
   "post_login_wait_ms": 7000,
+  "cloudflare_wait_seconds": 180,
   "auth_success_selectors": [
     "a:has-text(\"Вийти\")",
     "a[href*=\"/account\"]"

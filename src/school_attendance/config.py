@@ -22,6 +22,8 @@ class AppConfig:
     selectors_path: Optional[Path]
     session_state_path: Path
     base_url: str
+    nz_headless: bool = False
+    cloudflare_wait_seconds: int = 180
 
 
 def load_config(env_file: Optional[Path] = None) -> AppConfig:
@@ -42,6 +44,8 @@ def load_config(env_file: Optional[Path] = None) -> AppConfig:
         "EXCUSED_MEDICAL,EXCUSED_FAMILY,EXCUSED_ADMIN",
     )
     excused_codes = {item.strip() for item in excused.split(",") if item.strip()}
+    nz_headless = _parse_bool(os.getenv("NZ_HEADLESS"), default=False)
+    cloudflare_wait_seconds = int(os.getenv("NZ_CLOUDFLARE_WAIT_SECONDS", "180"))
 
     return AppConfig(
         nz_login=os.getenv("NZ_LOGIN"),
@@ -55,7 +59,20 @@ def load_config(env_file: Optional[Path] = None) -> AppConfig:
         selectors_path=Path(os.getenv("SELECTORS_PATH")) if os.getenv("SELECTORS_PATH") else None,
         session_state_path=Path(os.getenv("SESSION_STATE_PATH", "config/nz_session_state.json")),
         base_url=os.getenv("NZ_BASE_URL", "https://nz.ua"),
+        nz_headless=nz_headless,
+        cloudflare_wait_seconds=cloudflare_wait_seconds,
     )
+
+
+def _parse_bool(raw: Optional[str], default: bool) -> bool:
+    if raw is None:
+        return default
+    token = raw.strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _load_dotenv(path: Path) -> None:

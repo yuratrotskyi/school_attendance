@@ -4,6 +4,7 @@
 1. Встановіть залежності: `python3 -m pip install -r requirements.txt`.
 2. Встановіть браузер: `playwright install chromium`.
 3. Створіть `.env` з `.env.example` і внесіть доступи до `nz.ua`.
+   Для роботи з Cloudflare залишайте `NZ_HEADLESS=false`.
 4. Скопіюйте `config/nz_selectors.example.json` у `config/nz_selectors.json`.
 5. Оновіть у `config/nz_selectors.json` селектори:
    - `journal_list` для сторінки `https://nz.ua/journal/list` і її пагінації;
@@ -13,6 +14,7 @@
 PYTHONPATH=src python3 -m school_attendance.cli bootstrap-session --timeout-seconds 300
 ```
 Після відкриття браузера виконайте ручний вхід і поверніться в термінал.
+Якщо бачите Cloudflare "Verify you are human", пройдіть перевірку в цьому ж вікні.
 
 ## 2. Щоденний запуск (автоматичний)
 ```bash
