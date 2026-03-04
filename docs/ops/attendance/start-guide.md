@@ -6,6 +6,11 @@
 3. Створіть `.env` з `.env.example` і внесіть доступи до `nz.ua`.
 4. Скопіюйте `config/nz_selectors.example.json` у `config/nz_selectors.json`.
 5. Оновіть у `config/nz_selectors.json` URL і селектори під ваш інтерфейс.
+6. Одноразово збережіть авторизовану сесію:
+```bash
+PYTHONPATH=src python3 -m school_attendance.cli bootstrap-session --timeout-seconds 300
+```
+Після відкриття браузера виконайте ручний вхід і поверніться в термінал.
 
 ## 2. Щоденний запуск (автоматичний)
 ```bash

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 import os
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Optional, Set
 
 
 @dataclass
@@ -20,6 +20,7 @@ class AppConfig:
     out_dir: Path
     logs_dir: Path
     selectors_path: Optional[Path]
+    session_state_path: Path
     base_url: str
 
 
@@ -52,6 +53,7 @@ def load_config(env_file: Optional[Path] = None) -> AppConfig:
         out_dir=Path(os.getenv("OUT_DIR", "out")),
         logs_dir=Path(os.getenv("LOGS_DIR", "logs")),
         selectors_path=Path(os.getenv("SELECTORS_PATH")) if os.getenv("SELECTORS_PATH") else None,
+        session_state_path=Path(os.getenv("SESSION_STATE_PATH", "config/nz_session_state.json")),
         base_url=os.getenv("NZ_BASE_URL", "https://nz.ua"),
     )
 

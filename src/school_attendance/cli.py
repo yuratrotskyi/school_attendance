@@ -10,6 +10,7 @@ from typing import Optional
 
 from .config import load_config
 from .pipeline import run_daily
+from .session_bootstrap import bootstrap_session
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     run_daily_parser.add_argument("--skip-collect", action="store_true", help="Skip nz.ua data collection")
     run_daily_parser.add_argument("--raw-file", action="append", default=[], help="Path to raw CSV export")
     run_daily_parser.add_argument("--env-file", default=".env", help="Path to .env file")
+
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap-session",
+        help="Open browser for manual nz.ua login and save session",
+    )
+    bootstrap_parser.add_argument("--env-file", default=".env", help="Path to .env file")
+    bootstrap_parser.add_argument("--timeout-seconds", type=int, default=300, help="Wait timeout for auth state")
 
     return parser
 
@@ -47,6 +55,12 @@ def main(argv: Optional[list] = None) -> int:
             raw_files=[Path(p) for p in args.raw_file],
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "bootstrap-session":
+        config = load_config(Path(args.env_file))
+        path = bootstrap_session(config=config, timeout_seconds=args.timeout_seconds)
+        print(json.dumps({"session_state_path": str(path)}, ensure_ascii=False, indent=2))
         return 0
 
     parser.print_help()

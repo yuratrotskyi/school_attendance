@@ -31,6 +31,7 @@ class TestPipelineDryRun(unittest.TestCase):
                 out_dir=base / "out",
                 logs_dir=base / "logs",
                 selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
                 base_url="https://nz.ua",
             )
 
