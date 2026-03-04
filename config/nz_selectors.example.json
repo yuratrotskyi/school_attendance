@@ -1,0 +1,36 @@
+{
+  "login_url": "https://nz.ua/",
+  "open_login_button_selector": "text=Увійти",
+  "open_login_wait_ms": 1200,
+  "login_selector": "#loginform-login",
+  "password_selector": "#loginform-password",
+  "submit_selector": "button[name=\"login-button\"]",
+  "post_login_wait_ms": 7000,
+  "cloudflare_wait_seconds": 180,
+  "cloudflare_notice_after_seconds": 5,
+  "auth_success_selectors": [
+    "a:has-text(\"Вийти\")",
+    "a[href*=\"/account\"]"
+  ],
+  "journal_list": {
+    "url": "https://nz.ua/journal/list",
+    "link_selector": "a[href*=\"/journal/\"]",
+    "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
+    "wait_ms": 1500,
+    "max_pages": 50
+  },
+  "journal_page": {
+    "api_first": true,
+    "class_name_selector": "h1",
+    "row_selector": "table tbody tr",
+    "student_name_selector": "td:nth-child(2)",
+    "student_id_attr": "data-student-id",
+    "mark_cell_selector": "td[data-date]",
+    "mark_date_attr": "data-date",
+    "mark_lesson_attr": "data-lesson-no",
+    "mark_text_attr": null,
+    "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
+    "wait_ms": 1500,
+    "max_pages": 20
+  }
+}
