@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import csv
 from datetime import date, datetime
+import html
 import json
 from pathlib import Path
 import re
-import time
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -445,10 +445,12 @@ def _is_cloudflare_challenge_html(html: str) -> bool:
     token = (html or "").lower()
     markers = [
         "cf-turnstile-response",
-        "/cdn-cgi/challenge-platform/",
+        "/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/",
         "performing security verification",
         "just a moment",
         "verify you are human",
+        "__cf_chl_f_tk=",
+        "__cf_chl_rt_tk=",
     ]
     return any(marker in token for marker in markers)
 
@@ -471,6 +473,8 @@ def _ensure_not_cloudflare_blocked(page: Any, config: AppConfig, selector_cfg: D
         return
 
     wait_seconds = int(selector_cfg.get("cloudflare_wait_seconds", config.cloudflare_wait_seconds))
+    notice_after_seconds = int(selector_cfg.get("cloudflare_notice_after_seconds", 5))
+    notice_after_seconds = max(0, notice_after_seconds)
     if config.nz_headless:
         _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem=f"cloudflare-{stage}")
         raise CollectorError(
@@ -478,13 +482,17 @@ def _ensure_not_cloudflare_blocked(page: Any, config: AppConfig, selector_cfg: D
             "Set NZ_HEADLESS=false, run bootstrap-session once, then run-daily again."
         )
 
-    print("[collector] Cloudflare verification detected. Complete checkbox in opened browser window...")
-    deadline = time.time() + wait_seconds
-
-    while time.time() < deadline:
-        page.wait_for_timeout(1000)
+    notice_printed = False
+    for second in range(max(1, wait_seconds)):
         if not _is_cloudflare_challenge_page(page):
             return
+        if not notice_printed and second >= notice_after_seconds:
+            print("[collector] Cloudflare verification detected. Complete checkbox in opened browser window...")
+            notice_printed = True
+        page.wait_for_timeout(1000)
+
+    if not _is_cloudflare_challenge_page(page):
+        return
 
     _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem=f"cloudflare-timeout-{stage}")
     raise CollectorError(
@@ -776,8 +784,16 @@ def _extract_attendance_grid_payload(page: Any) -> Optional[Dict[str, Any]]:
                     nameColIdx = 1;
                 }
 
-                const bodyRows = Array.from(best.querySelectorAll('tbody tr'))
-                    .map(row => Array.from(row.children).map(cell => norm(cell.innerText)));
+                const bodyRows = Array.from(best.querySelectorAll('tbody tr')).map(row =>
+                    Array.from(row.children).map(cell => {
+                        const input = cell.querySelector('input.mark-cell, input[value]');
+                        if (input) {
+                            const val = norm(input.value);
+                            if (val) return val;
+                        }
+                        return norm(cell.innerText);
+                    })
+                );
 
                 const topicTable = tables.find(table => {
                     const text = norm(table.innerText);
@@ -823,7 +839,8 @@ def _build_grid_column_meta(
     topics_dates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     day_tokens = [str(item).strip() for item in day_headers]
-    attendance_col_indexes = [idx for idx, token in enumerate(day_tokens) if _to_int(token) is not None]
+    day_numbers = [_extract_day_number(token) for token in day_tokens]
+    attendance_col_indexes = [idx for idx, day in enumerate(day_numbers) if day is not None]
 
     if not attendance_col_indexes:
         start_idx = 2 if len(day_tokens) > 2 else 0
@@ -834,14 +851,23 @@ def _build_grid_column_meta(
 
     expanded_months = _expand_month_headers(month_headers, len(day_tokens))
     meta: List[Dict[str, Any]] = []
+    current_month: Optional[int] = None
 
     for pos, col_idx in enumerate(attendance_col_indexes):
         if pos < len(topics_dates):
             date_iso = topics_dates[pos]["date"]
             lesson_no = topics_dates[pos]["lesson_no"]
         else:
-            month_token = expanded_months[col_idx] if col_idx < len(expanded_months) else ""
-            date_iso = _resolve_date_from_day_and_month(day_tokens[col_idx], month_token, semester_bounds)
+            day_value = day_numbers[col_idx] if col_idx < len(day_numbers) else None
+            month_token = day_tokens[col_idx]
+            month_no = _month_number_from_token(month_token)
+            if month_no is None and col_idx < len(expanded_months):
+                month_no = _month_number_from_token(expanded_months[col_idx])
+            if month_no is None:
+                month_no = current_month
+            if month_no is not None:
+                current_month = month_no
+            date_iso = _resolve_date_from_day_and_month(day_value, month_no, semester_bounds)
             lesson_no = pos + 1
 
         if not date_iso:
@@ -943,13 +969,28 @@ def _resolve_date_from_day_and_month(
 
 
 def _month_number_from_token(token: Any) -> Optional[int]:
+    if isinstance(token, int):
+        return token if 1 <= token <= 12 else None
+
     value = str(token or "").strip().lower().replace(".", "")
     if not value:
         return None
-    for key, month in _UK_MONTH_MAP.items():
-        if value.startswith(key):
-            return month
+
+    for part in re.findall(r"[A-Za-zА-Яа-яІіЇїЄєҐґ]+", value):
+        for key, month in _UK_MONTH_MAP.items():
+            if part.startswith(key):
+                return month
     return None
+
+
+def _extract_day_number(token: Any) -> Optional[int]:
+    match = re.search(r"\b(\d{1,2})\b", str(token or ""))
+    if not match:
+        return None
+    day = _to_int(match.group(1))
+    if day is None or day < 1 or day > 31:
+        return None
+    return day
 
 
 def _resolve_year_for_month(month: int, semester_bounds: Optional[Sequence[str]]) -> Optional[int]:
@@ -971,12 +1012,45 @@ def _resolve_year_for_month(month: int, semester_bounds: Optional[Sequence[str]]
 
 def _extract_class_name(page: Any, page_cfg: Dict[str, Any]) -> str:
     selector = page_cfg.get("class_name_selector", "h1")
-    if not selector:
+    if selector:
+        locator = page.locator(selector)
+        if locator.count() > 0:
+            text = _safe_locator_text(locator.first)
+            parsed = _extract_class_name_hint(text)
+            if parsed:
+                return parsed
+
+    try:
+        parsed_title = _extract_class_name_hint(page.title())
+        if parsed_title:
+            return parsed_title
+    except Exception:
+        pass
+
+    return ""
+
+
+def _extract_class_name_hint(text: Any) -> str:
+    token = " ".join(str(text or "").split())
+    if not token:
         return ""
-    locator = page.locator(selector)
-    if locator.count() == 0:
-        return ""
-    return _safe_locator_text(locator.first)
+
+    patterns = [
+        r"журнал оцінок для\s+(.+?)(?:\s*\[[^\]]*\]|$)",
+        r"журнал\s+(.+?)(?:\s*\||$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, token, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value = match.group(1).strip(" :-")
+        if value:
+            return value
+
+    class_match = re.search(r"\b\d{1,2}\s*[-–]\s*[A-Za-zА-Яа-яІіЇїЄєҐґ](?:\s*\([^)]*\))?", token)
+    if class_match:
+        return class_match.group(0).strip()
+    return ""
 
 
 def _extract_next_href(page: Any, next_selector: str, current_url: str, base_url: str) -> Optional[str]:
@@ -1195,13 +1269,56 @@ def _collect_paginated_links(pages: Iterable[Dict[str, Any]], base_url: str) -> 
 
     for page in pages:
         for raw_link in page.get("links", []):
-            url = urljoin(base_url, str(raw_link).strip())
+            url = _normalize_collectable_journal_url(raw_link=raw_link, base_url=base_url)
             if not url or url in seen:
                 continue
             seen.add(url)
             links.append(url)
 
     return links
+
+
+def _normalize_collectable_journal_url(raw_link: Any, base_url: str) -> Optional[str]:
+    raw = html.unescape(str(raw_link or "").strip())
+    if not raw:
+        return None
+
+    url = urljoin(base_url, raw)
+    if not _is_collectable_journal_url(url):
+        return None
+    return _canonical_url(url)
+
+
+def _is_collectable_journal_url(url: str) -> bool:
+    parsed = urlparse(str(url or ""))
+    path = parsed.path.lower().rstrip("/")
+    query = parse_qs(parsed.query)
+
+    if not path.startswith("/journal"):
+        return False
+
+    blocked_paths = (
+        "/journal/list",
+        "/journal/create",
+        "/journal/edit",
+        "/journal/edit-subgroup",
+        "/journal/add-edit-lesson",
+        "/journal/export-xls",
+        "/journal/export-pdf",
+        "/journal/calculate-rating",
+        "/journal/calculate-nus",
+        "/journal/import-xls",
+    )
+    if path in blocked_paths:
+        return False
+
+    if re.fullmatch(r"/journal/\d+", path):
+        return True
+    if path == "/journal":
+        return bool(query.get("id") or query.get("journal"))
+    if path == "/journal/index":
+        return bool(query.get("id") or query.get("journal"))
+    return False
 
 
 def _safe_locator_text(locator: Any) -> str:

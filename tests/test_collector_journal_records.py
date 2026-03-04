@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 
 from school_attendance.collector import (
+    _build_grid_column_meta,
     _collect_paginated_links,
+    _extract_class_name_hint,
     _extract_dates_from_topics,
     _extract_candidate_journal_hrefs,
     _is_journal_href,
@@ -99,6 +101,24 @@ class TestCollectorJournalRecords(unittest.TestCase):
             got,
         )
 
+    def test_collect_paginated_links_filters_non_journal_actions_and_amp_duplicates(self):
+        pages = [
+            {
+                "links": [
+                    "/journal/index?journal=13190998&subgroup=2261045",
+                    "/journal/index?journal=13190998&amp;subgroup=2261045",
+                    "/journal/create",
+                    "/journal/edit?journal_id=13190998",
+                    "/journal/export-xls?journal=13190998",
+                ],
+                "next": None,
+            }
+        ]
+
+        got = _collect_paginated_links(pages, base_url="https://nz.ua")
+
+        self.assertEqual(["https://nz.ua/journal/index?journal=13190998&subgroup=2261045"], got)
+
     def test_recognizes_journal_links_with_query_id_format(self):
         self.assertTrue(_is_journal_href("/journal?id=123"))
         self.assertTrue(_is_journal_href("journal?id=123"))
@@ -155,6 +175,42 @@ class TestCollectorJournalRecords(unittest.TestCase):
             got,
         )
 
+    def test_build_grid_column_meta_handles_day_cells_with_month_text(self):
+        day_headers = [
+            "#",
+            "ПІБ учня",
+            "23 Бер.",
+            "24",
+            "30",
+            "31",
+            "6 Квіт.",
+            "7",
+            "13",
+            "14",
+        ]
+        month_headers = [{"text": token, "span": 1} for token in day_headers]
+
+        got = _build_grid_column_meta(
+            day_headers=day_headers,
+            month_headers=month_headers,
+            semester_bounds=("2026-01-07", "2026-06-05"),
+            topics_dates=[],
+        )
+
+        self.assertEqual(
+            [
+                "2026-03-23",
+                "2026-03-24",
+                "2026-03-30",
+                "2026-03-31",
+                "2026-04-06",
+                "2026-04-07",
+                "2026-04-13",
+                "2026-04-14",
+            ],
+            [item["date"] for item in got],
+        )
+
     def test_pick_next_pagination_href_prefers_new_page(self):
         current = "https://nz.ua/journal?id=123&page=1"
         links = [
@@ -166,6 +222,13 @@ class TestCollectorJournalRecords(unittest.TestCase):
         next_href = _pick_next_pagination_href(current_url=current, hrefs=links, base_url="https://nz.ua")
 
         self.assertEqual("https://nz.ua/journal?id=123&page=2", next_href)
+
+    def test_extract_class_name_hint_from_title_and_header_text(self):
+        from_title = _extract_class_name_hint("Журнал 6-А (І група підгрупа) | Нові знання")
+        from_header = _extract_class_name_hint("Журнал оцінок для 5-А (I група підгрупа) [Інформатика]")
+
+        self.assertEqual("6-А (І група підгрупа)", from_title)
+        self.assertEqual("5-А (I група підгрупа)", from_header)
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

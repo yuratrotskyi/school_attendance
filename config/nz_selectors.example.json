@@ -7,6 +7,7 @@
   "submit_selector": "button[name=\"login-button\"]",
   "post_login_wait_ms": 7000,
   "cloudflare_wait_seconds": 180,
+  "cloudflare_notice_after_seconds": 5,
   "auth_success_selectors": [
     "a:has-text(\"Вийти\")",
     "a[href*=\"/account\"]"
