@@ -5,7 +5,9 @@
 2. Встановіть браузер: `playwright install chromium`.
 3. Створіть `.env` з `.env.example` і внесіть доступи до `nz.ua`.
 4. Скопіюйте `config/nz_selectors.example.json` у `config/nz_selectors.json`.
-5. Оновіть у `config/nz_selectors.json` URL і селектори під ваш інтерфейс.
+5. Оновіть у `config/nz_selectors.json` селектори:
+   - `journal_list` для сторінки `https://nz.ua/journal/list` і її пагінації;
+   - `journal_page` для таблиці відвідуваності в журналі та пагінації сторінок журналу.
 6. Одноразово збережіть авторизовану сесію:
 ```bash
 PYTHONPATH=src python3 -m school_attendance.cli bootstrap-session --timeout-seconds 300
@@ -19,6 +21,11 @@ PYTHONPATH=src python3 -m school_attendance.cli run-daily --run-date YYYY-MM-DD
 
 Рекомендований час запуску: `06:00-06:20`.
 
+Логіка позначок у журналі:
+- `Н` враховується як відсутність.
+- `ХВ` ігнорується для метрик відсутності.
+- Інші значення вважаються присутністю.
+
 ## 3. Dry-run для перевірки локально
 ```bash
 PYTHONPATH=src python3 -m school_attendance.cli run-daily \
@@ -28,7 +35,7 @@ PYTHONPATH=src python3 -m school_attendance.cli run-daily \
 ```
 
 ## 4. Що генерується
-- `data/raw/<date>/` — сирі файли з `nz.ua`.
+- `data/raw/<date>/attendance-journal.csv` — сирий CSV, сформований з журналів `nz.ua`.
 - `data/normalized/<date>/attendance.csv` — нормалізовані дані.
 - `data/processed/<date>/incidents.csv` — інциденти "втік".
 - `out/<date>/summary.json`, `detail.csv`, `report.md` — фінальний пакет.

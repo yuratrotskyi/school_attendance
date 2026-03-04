@@ -10,24 +10,25 @@
     "a:has-text(\"Вийти\")",
     "a[href*=\"/account\"]"
   ],
-  "exports": [
-    {
-      "name": "attendance-week",
-      "url": "https://nz.ua/reports/attendance/week",
-      "download_button_selector": "button[data-action=\"export-csv\"]",
-      "timeout_ms": 30000
-    },
-    {
-      "name": "attendance-month",
-      "url": "https://nz.ua/reports/attendance/month",
-      "download_button_selector": "button[data-action=\"export-csv\"]",
-      "timeout_ms": 30000
-    },
-    {
-      "name": "attendance-semester",
-      "url": "https://nz.ua/reports/attendance/semester",
-      "download_button_selector": "button[data-action=\"export-csv\"]",
-      "timeout_ms": 30000
-    }
-  ]
+  "journal_list": {
+    "url": "https://nz.ua/journal/list",
+    "link_selector": "a[href*=\"/journal/\"]",
+    "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
+    "wait_ms": 1500,
+    "max_pages": 50
+  },
+  "journal_page": {
+    "api_first": true,
+    "class_name_selector": "h1",
+    "row_selector": "table tbody tr",
+    "student_name_selector": "td:nth-child(2)",
+    "student_id_attr": "data-student-id",
+    "mark_cell_selector": "td[data-date]",
+    "mark_date_attr": "data-date",
+    "mark_lesson_attr": "data-lesson-no",
+    "mark_text_attr": null,
+    "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
+    "wait_ms": 1500,
+    "max_pages": 20
+  }
 }

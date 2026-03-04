@@ -7,3 +7,4 @@ logs/
 __pycache__/
 *.pyc
 config/nz_selectors.json
+config/nz_session_state.json
