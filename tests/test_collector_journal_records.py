@@ -4,6 +4,7 @@ from pathlib import Path
 
 from school_attendance.collector import (
     _collect_paginated_links,
+    _extract_candidate_journal_hrefs,
     _is_journal_href,
     _normalize_journal_rows,
     _write_journal_records_csv,
@@ -96,10 +97,27 @@ class TestCollectorJournalRecords(unittest.TestCase):
 
     def test_recognizes_journal_links_with_query_id_format(self):
         self.assertTrue(_is_journal_href("/journal?id=123"))
+        self.assertTrue(_is_journal_href("journal?id=123"))
         self.assertTrue(_is_journal_href("https://nz.ua/journal?id=777"))
         self.assertTrue(_is_journal_href("/journal/entry/42"))
         self.assertFalse(_is_journal_href("/journal/list"))
         self.assertFalse(_is_journal_href("https://nz.ua/account/profile"))
+
+    def test_extract_candidate_journal_hrefs_from_js_and_html_values(self):
+        raw_values = [
+            "window.location='journal?id=321'",
+            "openJournal('/journal?id=456')",
+            "<a href=\"https://nz.ua/journal/list?page=2\">next</a>",
+            "data-url=\"https://nz.ua/journal/987\"",
+            "href=\"/account/profile\"",
+        ]
+
+        got = _extract_candidate_journal_hrefs(raw_values)
+
+        self.assertIn("journal?id=321", got)
+        self.assertIn("/journal?id=456", got)
+        self.assertIn("https://nz.ua/journal/987", got)
+        self.assertNotIn("https://nz.ua/journal/list?page=2", got)
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

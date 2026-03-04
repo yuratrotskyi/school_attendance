@@ -6,6 +6,7 @@ import csv
 from datetime import date, datetime
 import json
 from pathlib import Path
+import re
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 from urllib.parse import parse_qs, urljoin, urlparse
 
@@ -139,6 +140,9 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
         page.goto(current_url, wait_until="domcontentloaded")
         page.wait_for_timeout(wait_ms)
 
+        if _is_journal_href(page.url):
+            return _collect_paginated_links(pages=[{"links": [page.url], "next": None}], base_url=base_url)
+
         links = _extract_links_from_page(page=page, link_selector=link_selector, list_url=list_url)
         next_url = _extract_next_href(
             page=page,
@@ -154,7 +158,7 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
 
 
 def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> List[str]:
-    links: List[str] = []
+    raw_values: List[str] = []
     locator = page.locator(link_selector)
     count = locator.count()
     if count == 0 and link_selector != "a":
@@ -164,15 +168,51 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
     for idx in range(count):
         node = locator.nth(idx)
         href = (node.get_attribute("href") or "").strip()
-        if _is_journal_href(href):
-            links.append(href)
-            continue
-
         data_href = (node.get_attribute("data-href") or node.get_attribute("data-url") or "").strip()
-        if _is_journal_href(data_href):
-            links.append(data_href)
+        onclick = (node.get_attribute("onclick") or "").strip()
+        raw_values.extend([href, data_href, onclick])
 
-    return links
+    try:
+        attr_values = page.eval_on_selector_all(
+            "[href], [data-href], [data-url], [onclick]",
+            "els => els.flatMap(el => [el.getAttribute('href'), el.getAttribute('data-href'), el.getAttribute('data-url'), el.getAttribute('onclick')]).filter(Boolean)",
+        )
+        raw_values.extend(str(value) for value in attr_values)
+    except Exception:
+        pass
+
+    try:
+        raw_values.append(page.content())
+    except Exception:
+        pass
+
+    return _extract_candidate_journal_hrefs(raw_values)
+
+
+def _extract_candidate_journal_hrefs(raw_values: Iterable[str]) -> List[str]:
+    found: List[str] = []
+    seen: set = set()
+    token_pattern = re.compile(
+        r"https?://[^\"'\s<>]+|/[A-Za-z0-9_./?=&%#:-]+|journal\?[A-Za-z0-9_./?=&%#:-]+|journal/[A-Za-z0-9_./?=&%#:-]+"
+    )
+
+    for raw in raw_values:
+        if raw is None:
+            continue
+        text = str(raw).replace("\\/", "/")
+        candidates = [text]
+        candidates.extend(token_pattern.findall(text))
+
+        for candidate in candidates:
+            value = candidate.strip().strip("\"'`;,()[]{}")
+            if not value or value in seen:
+                continue
+            if not _is_journal_href(value):
+                continue
+            seen.add(value)
+            found.append(value)
+
+    return found
 
 
 def _is_journal_href(href: str) -> bool:
@@ -180,10 +220,27 @@ def _is_journal_href(href: str) -> bool:
     if not text:
         return False
 
-    normalized = text.lower()
-    if "/journal/list" in normalized:
+    normalized = text.lower().replace("\\/", "/")
+    if "journal" not in normalized:
         return False
-    return "/journal/" in normalized or "/journal?" in normalized
+    if "journal/list" in normalized:
+        return False
+
+    parsed = urlparse(normalized if "://" in normalized or normalized.startswith("/") else f"/{normalized}")
+    path = parsed.path.strip("/")
+
+    if re.search(r"(^|/)journal($|/)", path):
+        if re.search(r"(^|/)journal/list($|/)", path):
+            return False
+        return True
+
+    return (
+        normalized.startswith("journal?")
+        or "/journal?" in normalized
+        or "journal?" in normalized
+        or "/journal/" in normalized
+        or "journal/" in normalized
+    )
 
 
 def _collect_single_journal_records(page: Any, journal_url: str, base_url: str, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
