@@ -6,6 +6,7 @@ from school_attendance.collector import (
     _collect_paginated_links,
     _extract_candidate_journal_hrefs,
     _is_journal_href,
+    _looks_like_class_chip_label,
     _normalize_journal_rows,
     _write_journal_records_csv,
 )
@@ -118,6 +119,13 @@ class TestCollectorJournalRecords(unittest.TestCase):
         self.assertIn("/journal?id=456", got)
         self.assertIn("https://nz.ua/journal/987", got)
         self.assertNotIn("https://nz.ua/journal/list?page=2", got)
+
+    def test_detects_class_chip_label(self):
+        self.assertTrue(_looks_like_class_chip_label("5-А(I група)"))
+        self.assertTrue(_looks_like_class_chip_label("10-Б"))
+        self.assertTrue(_looks_like_class_chip_label("7-A"))
+        self.assertFalse(_looks_like_class_chip_label("Оберіть журнал"))
+        self.assertFalse(_looks_like_class_chip_label("Зведені звіти"))
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

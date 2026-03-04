@@ -100,9 +100,10 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         list_cfg=journal_cfg,
     )
     if not journal_urls:
+        _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem="journal-list-no-links")
         raise CollectorError(
             "No journal links found on /journal/list. "
-            "Update config.journal_list.link_selector to match your account page."
+            "Update config.journal_list.link_selector or check logs/artifacts for journal-list-no-links*.html"
         )
 
     all_records: List[Dict[str, Any]] = []
@@ -131,6 +132,7 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
     pages: List[Dict[str, Any]] = []
     current_url: Optional[str] = list_url
     visited: set = set()
+    click_discovery_urls: List[str] = []
 
     for _ in range(max_pages):
         if not current_url or current_url in visited:
@@ -144,6 +146,10 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
             return _collect_paginated_links(pages=[{"links": [page.url], "next": None}], base_url=base_url)
 
         links = _extract_links_from_page(page=page, link_selector=link_selector, list_url=list_url)
+        if not links:
+            discovered = _discover_journal_links_by_click(page=page, list_cfg=list_cfg, list_url=list_url)
+            click_discovery_urls.extend(discovered)
+
         next_url = _extract_next_href(
             page=page,
             next_selector=next_selector,
@@ -153,6 +159,9 @@ def _collect_journal_links(page: Any, list_url: str, base_url: str, list_cfg: Di
 
         pages.append({"links": links, "next": next_url})
         current_url = next_url
+
+    if click_discovery_urls:
+        pages.append({"links": click_discovery_urls, "next": None})
 
     return _collect_paginated_links(pages=pages, base_url=base_url)
 
@@ -187,6 +196,72 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
         pass
 
     return _extract_candidate_journal_hrefs(raw_values)
+
+
+def _discover_journal_links_by_click(page: Any, list_cfg: Dict[str, Any], list_url: str) -> List[str]:
+    chip_selector = list_cfg.get("chip_selector", "table tbody tr td:nth-child(2) *")
+    wait_ms = int(list_cfg.get("click_wait_ms", 1500))
+    max_clicks = int(list_cfg.get("max_chip_clicks", 200))
+
+    labels = _collect_clickable_chip_labels(page=page, chip_selector=chip_selector, max_clicks=max_clicks)
+    found: List[str] = []
+
+    for label in labels:
+        try:
+            page.goto(list_url, wait_until="domcontentloaded")
+            page.wait_for_timeout(wait_ms)
+        except Exception:
+            continue
+
+        candidates = page.locator(chip_selector).filter(has_text=label)
+        if candidates.count() == 0:
+            continue
+
+        clicked = candidates.first
+        try:
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=6000):
+                clicked.click(force=True)
+        except Exception:
+            try:
+                clicked.click(force=True)
+            except Exception:
+                continue
+            page.wait_for_timeout(wait_ms)
+
+        found.extend(_extract_candidate_journal_hrefs([page.url]))
+
+        try:
+            current_href = str(page.evaluate("() => window.location.href"))
+            found.extend(_extract_candidate_journal_hrefs([current_href]))
+        except Exception:
+            pass
+
+        try:
+            perf_urls = page.evaluate("() => performance.getEntriesByType('resource').map(x => x.name)")
+            found.extend(_extract_candidate_journal_hrefs(str(item) for item in perf_urls))
+        except Exception:
+            pass
+
+    return found
+
+
+def _collect_clickable_chip_labels(page: Any, chip_selector: str, max_clicks: int) -> List[str]:
+    labels: List[str] = []
+    seen: set = set()
+    locator = page.locator(chip_selector)
+    count = min(locator.count(), max_clicks)
+
+    for idx in range(count):
+        text = _safe_locator_text(locator.nth(idx))
+        if not _looks_like_class_chip_label(text):
+            continue
+        normalized = " ".join(text.split())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        labels.append(normalized)
+
+    return labels
 
 
 def _extract_candidate_journal_hrefs(raw_values: Iterable[str]) -> List[str]:
@@ -241,6 +316,44 @@ def _is_journal_href(href: str) -> bool:
         or "/journal/" in normalized
         or "journal/" in normalized
     )
+
+
+def _looks_like_class_chip_label(text: str) -> bool:
+    token = " ".join((text or "").split())
+    if not token:
+        return False
+    if len(token) > 48:
+        return False
+    if "-" not in token:
+        return False
+    if not re.search(r"\d", token):
+        return False
+    return bool(re.search(r"[A-Za-zА-Яа-яІіЇїЄєҐґ]", token))
+
+
+def _write_debug_artifacts(page: Any, logs_dir: Path, stem: str) -> None:
+    artifacts_dir = logs_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    html_path = artifacts_dir / f"{stem}-{timestamp}.html"
+    url_path = artifacts_dir / f"{stem}-{timestamp}.url.txt"
+    screenshot_path = artifacts_dir / f"{stem}-{timestamp}.png"
+
+    try:
+        html_path.write_text(page.content(), encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        url_path.write_text(str(page.url), encoding="utf-8")
+    except Exception:
+        pass
+
+    try:
+        page.screenshot(path=str(screenshot_path), full_page=True)
+    except Exception:
+        pass
 
 
 def _collect_single_journal_records(page: Any, journal_url: str, base_url: str, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
