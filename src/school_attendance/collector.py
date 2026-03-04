@@ -49,6 +49,11 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
         page = context.new_page()
 
         page.goto(selector_cfg.get("login_url", f"{config.base_url}/login"), wait_until="domcontentloaded")
+        open_login_button_selector = selector_cfg.get("open_login_button_selector")
+        if open_login_button_selector:
+            page.click(open_login_button_selector)
+            page.wait_for_timeout(int(selector_cfg.get("open_login_wait_ms", 1200)))
+
         page.fill(selector_cfg.get("login_selector", 'input[name="login"]'), config.nz_login)
         page.fill(selector_cfg.get("password_selector", 'input[name="password"]'), config.nz_password)
         page.click(selector_cfg.get("submit_selector", 'button[type="submit"]'))

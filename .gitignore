@@ -6,3 +6,4 @@ logs/
 .worktrees/
 __pycache__/
 *.pyc
+config/nz_selectors.json

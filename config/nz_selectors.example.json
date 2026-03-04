@@ -1,9 +1,10 @@
 {
-  "login_url": "https://nz.ua/login",
-  "login_selector": "input[name=\"login\"]",
-  "password_selector": "input[name=\"password\"]",
-  "submit_selector": "button[type=\"submit\"]",
-  "post_login_wait_ms": 2000,
+  "login_url": "https://nz.ua/",
+  "open_login_button_selector": "text=Увійти",
+  "login_selector": "#loginform-login",
+  "password_selector": "#loginform-password",
+  "submit_selector": "button[name=\"login-button\"]",
+  "post_login_wait_ms": 7000,
   "exports": [
     {
       "name": "attendance-week",
