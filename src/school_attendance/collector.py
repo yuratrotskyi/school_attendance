@@ -25,6 +25,16 @@ def _build_context_kwargs(config: AppConfig) -> Dict[str, Any]:
     return kwargs
 
 
+def _build_launch_kwargs(config: AppConfig) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {
+        "headless": config.nz_headless,
+        "args": ["--disable-blink-features=AutomationControlled"],
+    }
+    if config.browser_channel:
+        kwargs["channel"] = config.browser_channel
+    return kwargs
+
+
 def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
     """Collect raw attendance file from nz.ua journal list.
 
@@ -47,7 +57,7 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=config.nz_headless)
+        browser = pw.chromium.launch(**_build_launch_kwargs(config))
         context = browser.new_context(**_build_context_kwargs(config))
         page = context.new_page()
 

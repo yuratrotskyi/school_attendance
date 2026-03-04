@@ -40,7 +40,13 @@ def bootstrap_session(config: AppConfig, timeout_seconds: int = 300) -> Path:
     session_state_path.parent.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        launch_kwargs = {
+            "headless": False,
+            "args": ["--disable-blink-features=AutomationControlled"],
+        }
+        if config.browser_channel:
+            launch_kwargs["channel"] = config.browser_channel
+        browser = pw.chromium.launch(**launch_kwargs)
         context = browser.new_context()
         page = context.new_page()
 

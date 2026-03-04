@@ -5,6 +5,7 @@
 2. Встановіть браузер: `playwright install chromium`.
 3. Створіть `.env` з `.env.example` і внесіть доступи до `nz.ua`.
    Для роботи з Cloudflare залишайте `NZ_HEADLESS=false`.
+   Рекомендовано: `NZ_BROWSER_CHANNEL=chrome`.
 4. Скопіюйте `config/nz_selectors.example.json` у `config/nz_selectors.json`.
 5. Оновіть у `config/nz_selectors.json` селектори:
    - `journal_list` для сторінки `https://nz.ua/journal/list` і її пагінації;

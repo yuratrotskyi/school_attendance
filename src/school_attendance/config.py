@@ -24,6 +24,7 @@ class AppConfig:
     base_url: str
     nz_headless: bool = False
     cloudflare_wait_seconds: int = 180
+    browser_channel: Optional[str] = "chrome"
 
 
 def load_config(env_file: Optional[Path] = None) -> AppConfig:
@@ -46,6 +47,7 @@ def load_config(env_file: Optional[Path] = None) -> AppConfig:
     excused_codes = {item.strip() for item in excused.split(",") if item.strip()}
     nz_headless = _parse_bool(os.getenv("NZ_HEADLESS"), default=False)
     cloudflare_wait_seconds = int(os.getenv("NZ_CLOUDFLARE_WAIT_SECONDS", "180"))
+    browser_channel = (os.getenv("NZ_BROWSER_CHANNEL", "chrome") or "").strip() or None
 
     return AppConfig(
         nz_login=os.getenv("NZ_LOGIN"),
@@ -61,6 +63,7 @@ def load_config(env_file: Optional[Path] = None) -> AppConfig:
         base_url=os.getenv("NZ_BASE_URL", "https://nz.ua"),
         nz_headless=nz_headless,
         cloudflare_wait_seconds=cloudflare_wait_seconds,
+        browser_channel=browser_channel,
     )
 
 

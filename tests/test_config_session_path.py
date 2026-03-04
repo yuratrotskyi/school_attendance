@@ -11,6 +11,7 @@ class TestConfigSessionPath(unittest.TestCase):
         self._old_session_state_path = os.environ.pop("SESSION_STATE_PATH", None)
         self._old_nz_headless = os.environ.pop("NZ_HEADLESS", None)
         self._old_cf_wait = os.environ.pop("NZ_CLOUDFLARE_WAIT_SECONDS", None)
+        self._old_browser_channel = os.environ.pop("NZ_BROWSER_CHANNEL", None)
 
     def tearDown(self):
         if self._old_session_state_path is not None:
@@ -25,6 +26,10 @@ class TestConfigSessionPath(unittest.TestCase):
             os.environ["NZ_CLOUDFLARE_WAIT_SECONDS"] = self._old_cf_wait
         else:
             os.environ.pop("NZ_CLOUDFLARE_WAIT_SECONDS", None)
+        if self._old_browser_channel is not None:
+            os.environ["NZ_BROWSER_CHANNEL"] = self._old_browser_channel
+        else:
+            os.environ.pop("NZ_BROWSER_CHANNEL", None)
 
     def test_load_config_uses_default_session_state_path(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -47,12 +52,16 @@ class TestConfigSessionPath(unittest.TestCase):
     def test_load_config_parses_headless_and_cloudflare_wait(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             env_path = Path(tmp_dir) / ".env"
-            env_path.write_text("NZ_HEADLESS=true\nNZ_CLOUDFLARE_WAIT_SECONDS=90\n", encoding="utf-8")
+            env_path.write_text(
+                "NZ_HEADLESS=true\nNZ_CLOUDFLARE_WAIT_SECONDS=90\nNZ_BROWSER_CHANNEL=chrome\n",
+                encoding="utf-8",
+            )
 
             config = load_config(env_path)
 
             self.assertTrue(config.nz_headless)
             self.assertEqual(90, config.cloudflare_wait_seconds)
+            self.assertEqual("chrome", config.browser_channel)
 
 
 if __name__ == "__main__":
