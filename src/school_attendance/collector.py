@@ -123,6 +123,7 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         )
 
     all_records: List[Dict[str, Any]] = []
+    empty_debug_written = 0
     for journal_url in journal_urls:
         try:
             rows = _collect_single_journal_records(
@@ -132,12 +133,28 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
                 selector_cfg=selector_cfg,
                 config=config,
             )
+        except CollectorError:
+            raise
         except Exception as exc:
             print(f"[collector] Skip journal {journal_url}: {exc}")
             continue
+        if not rows:
+            if empty_debug_written < 3:
+                journal_id = _extract_journal_id(journal_url)
+                _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem=f"journal-empty-{journal_id}")
+                empty_debug_written += 1
+            continue
         all_records.extend(rows)
 
-    return _deduplicate_normalized_records(all_records)
+    deduped = _deduplicate_normalized_records(all_records)
+    if not deduped:
+        _write_text_artifact(
+            logs_dir=config.logs_dir,
+            stem="journal-no-records",
+            content="\n".join(journal_urls),
+            suffix="urls.txt",
+        )
+    return deduped
 
 
 def _collect_journal_links(
@@ -393,6 +410,14 @@ def _write_debug_artifacts(page: Any, logs_dir: Path, stem: str) -> None:
         page.screenshot(path=str(screenshot_path), full_page=True)
     except Exception:
         pass
+
+
+def _write_text_artifact(logs_dir: Path, stem: str, content: str, suffix: str = "txt") -> None:
+    artifacts_dir = logs_dir / "artifacts"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = artifacts_dir / f"{stem}-{timestamp}.{suffix}"
+    path.write_text(content, encoding="utf-8")
 
 
 def _is_cloudflare_challenge_title(title: str) -> bool:
