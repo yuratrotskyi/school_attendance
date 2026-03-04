@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import select
+import sys
 import time
+from typing import Callable, Sequence
 
 from .config import AppConfig
 from .collector import CollectorError
@@ -47,17 +50,19 @@ def bootstrap_session(config: AppConfig, timeout_seconds: int = 300) -> Path:
             page.wait_for_timeout(open_login_wait_ms)
 
         print("Виконайте ручний вхід у відкритому браузері, потім поверніться в термінал.")
+        print("Натисніть Enter у терміналі для ручного збереження сесії або дочекайтеся авто-виявлення входу.")
 
         if auth_success_selectors:
-            deadline = time.time() + timeout_seconds
-            while time.time() < deadline:
-                if any(page.locator(sel).count() > 0 for sel in auth_success_selectors):
-                    context.storage_state(path=str(session_state_path))
-                    context.close()
-                    browser.close()
-                    return session_state_path
-                page.wait_for_timeout(1000)
-            raise CollectorError("Timeout waiting for authenticated page state")
+            _wait_for_bootstrap_confirmation(
+                page=page,
+                auth_success_selectors=auth_success_selectors,
+                timeout_seconds=timeout_seconds,
+                manual_enter_detector=_manual_enter_pressed,
+            )
+            context.storage_state(path=str(session_state_path))
+            context.close()
+            browser.close()
+            return session_state_path
 
         input("Після успішного входу натисніть Enter для збереження сесії...")
         context.storage_state(path=str(session_state_path))
@@ -65,3 +70,36 @@ def bootstrap_session(config: AppConfig, timeout_seconds: int = 300) -> Path:
         browser.close()
 
     return session_state_path
+
+
+def _wait_for_bootstrap_confirmation(
+    page,
+    auth_success_selectors: Sequence[str],
+    timeout_seconds: int,
+    manual_enter_detector: Callable[[], bool],
+) -> str:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if any(page.locator(sel).count() > 0 for sel in auth_success_selectors):
+            return "selector"
+        if manual_enter_detector():
+            return "manual"
+        page.wait_for_timeout(1000)
+
+    raise CollectorError("Timeout waiting for authenticated page state")
+
+
+def _manual_enter_pressed() -> bool:
+    try:
+        readable, _, _ = select.select([sys.stdin], [], [], 0)
+    except Exception:
+        return False
+
+    if not readable:
+        return False
+
+    try:
+        sys.stdin.readline()
+    except Exception:
+        return False
+    return True
