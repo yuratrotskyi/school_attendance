@@ -4,3 +4,5 @@ data/
 out/
 logs/
 .worktrees/
+__pycache__/
+*.pyc

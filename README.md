@@ -1,43 +1,67 @@
 # Звітність відвідуваності школи
 
-Репозиторій містить документи та робочі шаблони для щоденної ранкової звітності по відсутніх учнях на основі даних з `nz.ua`.
+CLI-додаток і документація для щоденної автоматизації звітності по відвідуваності учнів на базі даних `nz.ua`.
 
-## Що тут є
-- Єдині правила формування звітів для адміністрації.
-- Шаблон щоденного звіту (PDF структура + CSV поля).
-- Правило інциденту "втік з уроків" (`1+`).
-- SOP, ескалації, KPI пілоту на 30 днів.
+## Що вміє додаток
+- Автоматично збирати raw-експорти з `nz.ua` (гібридний режим, через Playwright).
+- Нормалізувати CSV-дані в єдиний формат.
+- Обчислювати KPI за `7 днів / 30 днів / семестр`.
+- Виявляти інциденти "втік з уроків" за правилом `1+`.
+- Формувати вихідні файли: `summary.json`, `detail.csv`, `report.md`.
 
-## Швидкий старт
-1. Переконайтесь, що у відповідального є доступ до `nz.ua` і таблиці зведення.
-2. Відкрийте [базову інструкцію запуску](docs/ops/attendance/start-guide.md).
-3. Зберіть дані відвідуваності за 7/30/семестр.
-4. Оновіть зведення та перевірте інциденти "втік" за правилом `1+`.
-5. Сформуйте PDF і надішліть директору до `06:30`.
+## Вимоги
+- `Python 3.9+`
+- Для автоматичного збору: `playwright` + `chromium`
 
-## Щоденний цикл роботи
-- `06:00-06:20`: збір і зведення даних.
-- до `06:30`: доставка звіту.
-- до `10:00`: первинна перевірка інцидентів класними керівниками.
-- до `12:00`: фінальні статуси інцидентів.
+## Встановлення
+1. Встановіть залежності:
+   `python3 -m pip install -r requirements.txt`
+2. Встановіть браузер для Playwright:
+   `playwright install chromium`
+3. Створіть `.env` на основі прикладу:
+   `cp .env.example .env`
+4. Заповніть `NZ_LOGIN`, `NZ_PASSWORD` у `.env`.
 
-## Структура документації
-- Політика звітності: [`docs/ops/attendance/attendance-policy.md`](docs/ops/attendance/attendance-policy.md)
-- Щоденний SOP: [`docs/ops/attendance/daily-sop.md`](docs/ops/attendance/daily-sop.md)
-- Матриця ескалацій: [`docs/ops/attendance/escalation-matrix.md`](docs/ops/attendance/escalation-matrix.md)
-- Шаблон звіту: [`docs/templates/attendance/daily-report-template.md`](docs/templates/attendance/daily-report-template.md)
-- Поля експорту: [`docs/templates/attendance/daily-report-columns.csv`](docs/templates/attendance/daily-report-columns.csv)
+## Налаштування селекторів nz.ua
+1. Скопіюйте шаблон:
+   `cp config/nz_selectors.example.json config/nz_selectors.json`
+2. Актуалізуйте `url` і CSS-селектори під інтерфейс вашого акаунта `nz.ua`.
+3. Додайте в `.env`:
+   `SELECTORS_PATH=config/nz_selectors.json`
+
+## Запуск
+### 1) Dry-run (без логіну, локальний CSV)
+```bash
+PYTHONPATH=src python3 -m school_attendance.cli run-daily \
+  --dry-run \
+  --skip-collect \
+  --run-date 2026-03-04 \
+  --raw-file /шлях/до/attendance.csv
+```
+
+### 2) Автоматичний збір з nz.ua + обробка
+```bash
+PYTHONPATH=src python3 -m school_attendance.cli run-daily \
+  --run-date 2026-03-04
+```
+
+## Де шукати результати
+- Raw: `data/raw/<date>/`
+- Нормалізовані: `data/normalized/<date>/attendance.csv`
+- Оброблені: `data/processed/<date>/incidents.csv`
+- Фінальний пакет: `out/<date>/summary.json`, `out/<date>/detail.csv`, `out/<date>/report.md`
 
 ## Правило "втік з уроків"
-Інцидент фіксується, якщо учень після факту присутності в поточний день має `1+` пропущених уроків без офіційної причини.
+Інцидент фіксується, якщо учень після першої присутності у день має `1+` неповажний пропуск.
 
-## KPI пілоту на 30 днів
-- `>=95%` звітів доставлено до `06:30`.
-- Розбіжність з первинними даними `<=2%`.
-- `100%` інцидентів мають статус до `12:00`.
-- Неопрацьовані інциденти на кінець дня `<=5%`.
+## Тести
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
 
-## Повна документація
-- Дизайн рішення: [`docs/plans/2026-03-04-attendance-reporting-design.md`](docs/plans/2026-03-04-attendance-reporting-design.md)
-- План впровадження: [`docs/plans/2026-03-04-attendance-reporting-implementation-plan.md`](docs/plans/2026-03-04-attendance-reporting-implementation-plan.md)
-- Базова інструкція запуску: [`docs/ops/attendance/start-guide.md`](docs/ops/attendance/start-guide.md)
+## Документація
+- Політика: [`docs/ops/attendance/attendance-policy.md`](docs/ops/attendance/attendance-policy.md)
+- SOP: [`docs/ops/attendance/daily-sop.md`](docs/ops/attendance/daily-sop.md)
+- Start guide: [`docs/ops/attendance/start-guide.md`](docs/ops/attendance/start-guide.md)
+- Дизайн додатка: [`docs/plans/2026-03-04-nz-attendance-app-design.md`](docs/plans/2026-03-04-nz-attendance-app-design.md)
+- План реалізації: [`docs/plans/2026-03-04-nz-attendance-app-implementation-plan.md`](docs/plans/2026-03-04-nz-attendance-app-implementation-plan.md)

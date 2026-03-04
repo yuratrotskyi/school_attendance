@@ -1,0 +1,27 @@
+{
+  "login_url": "https://nz.ua/login",
+  "login_selector": "input[name=\"login\"]",
+  "password_selector": "input[name=\"password\"]",
+  "submit_selector": "button[type=\"submit\"]",
+  "post_login_wait_ms": 2000,
+  "exports": [
+    {
+      "name": "attendance-week",
+      "url": "https://nz.ua/reports/attendance/week",
+      "download_button_selector": "button[data-action=\"export-csv\"]",
+      "timeout_ms": 30000
+    },
+    {
+      "name": "attendance-month",
+      "url": "https://nz.ua/reports/attendance/month",
+      "download_button_selector": "button[data-action=\"export-csv\"]",
+      "timeout_ms": 30000
+    },
+    {
+      "name": "attendance-semester",
+      "url": "https://nz.ua/reports/attendance/semester",
+      "download_button_selector": "button[data-action=\"export-csv\"]",
+      "timeout_ms": 30000
+    }
+  ]
+}
