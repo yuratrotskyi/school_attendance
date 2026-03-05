@@ -516,6 +516,7 @@ def _collect_single_journal_records(
     journal_id = _extract_journal_id(journal_url)
     class_name_hint = ""
     raw_rows: List[Dict[str, Any]] = []
+    anchored_to_first_page = False
 
     current_url: Optional[str] = journal_url
     visited: set = set()
@@ -528,6 +529,14 @@ def _collect_single_journal_records(
         page.goto(current_url, wait_until="domcontentloaded")
         page.wait_for_timeout(wait_ms)
         _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="journal-page")
+
+        if not anchored_to_first_page:
+            anchored_to_first_page = True
+            first_url = _extract_first_href(page=page, current_url=page.url, base_url=base_url)
+            if first_url and not _urls_equal(first_url, page.url):
+                visited.discard(current_url)
+                current_url = first_url
+                continue
 
         if not class_name_hint:
             class_name_hint = _extract_class_name(page=page, page_cfg=page_cfg)
@@ -1075,15 +1084,22 @@ def _extract_next_href(page: Any, next_selector: str, current_url: str, base_url
     return _pick_next_pagination_href(current_url=current_url, hrefs=hrefs, base_url=base_url)
 
 
+def _extract_first_href(page: Any, current_url: str, base_url: str) -> Optional[str]:
+    hrefs: List[str] = []
+
+    try:
+        hrefs = page.eval_on_selector_all(
+            ".pagination a, nav a[aria-label*='page'], a[rel='prev'], a[rel='next']",
+            "els => els.map(el => el.getAttribute('href')).filter(Boolean)",
+        )
+    except Exception:
+        hrefs = []
+
+    return _pick_first_pagination_href(current_url=current_url, hrefs=hrefs, base_url=base_url)
+
+
 def _pick_next_pagination_href(current_url: str, hrefs: Iterable[str], base_url: str) -> Optional[str]:
-    normalized_links: List[str] = []
-    seen: set = set()
-    for raw_href in hrefs:
-        url = urljoin(base_url, str(raw_href).strip())
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        normalized_links.append(url)
+    normalized_links = _normalize_pagination_hrefs(hrefs=hrefs, base_url=base_url)
 
     if not normalized_links:
         return None
@@ -1105,6 +1121,48 @@ def _pick_next_pagination_href(current_url: str, hrefs: Iterable[str], base_url:
         if not _urls_equal(link, current_url):
             return link
     return None
+
+
+def _pick_first_pagination_href(current_url: str, hrefs: Iterable[str], base_url: str) -> Optional[str]:
+    normalized_links = _normalize_pagination_hrefs(hrefs=hrefs, base_url=base_url)
+    if not normalized_links:
+        return None
+
+    current_page = _extract_page_number(current_url)
+    page_links: List[tuple] = []
+    for link in normalized_links:
+        link_page = _extract_page_number(link)
+        if link_page is None:
+            continue
+        page_links.append((link_page, link))
+
+    if not page_links:
+        return None
+
+    page_links.sort(key=lambda item: item[0])
+
+    if current_page is None:
+        for page_no, link in page_links:
+            if page_no == 1:
+                return link
+        return None
+
+    for page_no, link in page_links:
+        if page_no < current_page:
+            return link
+    return None
+
+
+def _normalize_pagination_hrefs(hrefs: Iterable[str], base_url: str) -> List[str]:
+    normalized_links: List[str] = []
+    seen: set = set()
+    for raw_href in hrefs:
+        url = urljoin(base_url, str(raw_href).strip())
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        normalized_links.append(url)
+    return normalized_links
 
 
 def _urls_equal(first: str, second: str) -> bool:

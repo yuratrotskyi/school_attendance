@@ -11,6 +11,7 @@ from school_attendance.collector import (
     _is_journal_href,
     _looks_like_class_chip_label,
     _normalize_journal_rows,
+    _pick_first_pagination_href,
     _pick_next_pagination_href,
     _resolve_date_from_day_and_month,
     _write_journal_records_csv,
@@ -222,6 +223,19 @@ class TestCollectorJournalRecords(unittest.TestCase):
         next_href = _pick_next_pagination_href(current_url=current, hrefs=links, base_url="https://nz.ua")
 
         self.assertEqual("https://nz.ua/journal?id=123&page=2", next_href)
+
+    def test_pick_first_pagination_href_moves_to_page_one_from_middle(self):
+        current = "https://nz.ua/journal?id=123&page=5"
+        links = [
+            "https://nz.ua/journal?id=123&page=4",
+            "https://nz.ua/journal?id=123&page=1",
+            "https://nz.ua/journal?id=123&page=5",
+            "https://nz.ua/journal?id=123&page=6",
+        ]
+
+        first_href = _pick_first_pagination_href(current_url=current, hrefs=links, base_url="https://nz.ua")
+
+        self.assertEqual("https://nz.ua/journal?id=123&page=1", first_href)
 
     def test_extract_class_name_hint_from_title_and_header_text(self):
         from_title = _extract_class_name_hint("Журнал 6-А (І група підгрупа) | Нові знання")
