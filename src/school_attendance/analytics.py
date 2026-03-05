@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from datetime import date, timedelta
+import re
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .models import AttendanceRecord
@@ -265,3 +266,63 @@ def build_ten_day_absence_periods(
 
     periods.sort(key=lambda item: (item["class_name"], item["student_name"], item["period_start"]))
     return by_student, periods
+
+
+def build_class_absence_today_yesterday(
+    records: Sequence[AttendanceRecord],
+    run_date: date,
+) -> Dict[str, object]:
+    """Build class-level absent-student counts for today and yesterday."""
+
+    yesterday = run_date - timedelta(days=1)
+    classes: Set[str] = set()
+    absent_today: Dict[str, Set[str]] = defaultdict(set)
+    absent_yesterday: Dict[str, Set[str]] = defaultdict(set)
+
+    for row in records:
+        if row.lesson_date != run_date and row.lesson_date != yesterday:
+            continue
+        class_name = str(row.class_name or "").strip()
+        if not class_name:
+            continue
+        classes.add(class_name)
+        if row.status != "ABSENT":
+            continue
+        if row.lesson_date == run_date:
+            absent_today[class_name].add(row.student_id)
+        elif row.lesson_date == yesterday:
+            absent_yesterday[class_name].add(row.student_id)
+
+    sorted_classes = sorted(classes, key=_class_sort_key)
+    rows: List[Dict[str, object]] = []
+    total_today = 0
+    total_yesterday = 0
+    for class_name in sorted_classes:
+        today_count = len(absent_today.get(class_name, set()))
+        yesterday_count = len(absent_yesterday.get(class_name, set()))
+        total_today += today_count
+        total_yesterday += yesterday_count
+        rows.append(
+            {
+                "class_name": class_name,
+                "today_count": today_count,
+                "yesterday_count": yesterday_count,
+            }
+        )
+
+    return {
+        "total_today": total_today,
+        "total_yesterday": total_yesterday,
+        "rows": rows,
+    }
+
+
+def _class_sort_key(class_name: str) -> Tuple[int, int, str, str]:
+    normalized = " ".join(str(class_name or "").strip().split())
+    match = re.search(r"^\s*(\d{1,2})\s*[-–]\s*([A-Za-zА-Яа-яІіЇїЄєҐґ])", normalized)
+    if not match:
+        return (1, 0, "", normalized.lower())
+
+    grade = int(match.group(1))
+    letter = match.group(2).lower()
+    return (0, -grade, letter, normalized.lower())

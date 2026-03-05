@@ -19,6 +19,7 @@ def write_report_bundle(
     incidents: Iterable[Mapping[str, object]],
     ten_day_summary: Optional[Mapping[str, Mapping[str, object]]] = None,
     ten_day_periods: Optional[Iterable[Mapping[str, object]]] = None,
+    class_daily_absence: Optional[Mapping[str, object]] = None,
 ) -> Dict[str, str]:
     """Write summary JSON, details CSV and markdown report bundle."""
 
@@ -30,10 +31,12 @@ def write_report_bundle(
     grouped_path = out_dir / "student-absence-summary.csv"
     report_md_path = out_dir / "report.md"
     ten_day_periods_path = out_dir / "ten-day-absence-periods.csv"
+    class_daily_absence_path = out_dir / "відсутність-сьогодні-вчора.csv"
     records_list = list(records)
     incidents_list = list(incidents)
     ten_day_summary_map = ten_day_summary or {}
     ten_day_periods_list = list(ten_day_periods or [])
+    class_daily_absence_data = class_daily_absence or {"total_today": 0, "total_yesterday": 0, "rows": []}
     grouped_rows = _build_student_absence_rows(records_list, summary, ten_day_summary_map)
 
     summary_path.write_text(
@@ -44,12 +47,14 @@ def write_report_bundle(
     _write_detail_csv(detail_path, records_list)
     _write_student_absence_csv(grouped_path, grouped_rows)
     _write_report_markdown(report_md_path, run_date, summary, incidents_list, grouped_rows)
+    _write_class_absence_today_yesterday_csv(class_daily_absence_path, class_daily_absence_data)
 
     paths = {
         "summary_json": str(summary_path),
         "detail_csv": str(detail_path),
         "student_absence_summary_csv": str(grouped_path),
         "report_md": str(report_md_path),
+        "class_absence_today_yesterday_csv": str(class_daily_absence_path),
     }
     if ten_day_periods_list:
         _write_ten_day_periods_csv(ten_day_periods_path, ten_day_periods_list)
@@ -159,14 +164,14 @@ def _write_report_markdown(
 
 def _write_student_absence_csv(path: Path, rows: Iterable[Mapping[str, object]]) -> None:
     fields = [
-        "student_id",
-        "student_name",
-        "class_name",
-        "week_absent_lessons",
-        "month_absent_lessons",
-        "semester_absent_lessons",
-        "ten_plus_periods_count",
-        "last_ten_plus_period",
+        "ID учня",
+        "Учень",
+        "Клас",
+        "Н (7 днів)",
+        "Н (30 днів)",
+        "Н",
+        "К-сть періодів 10+",
+        "Останній період 10+ (від-до)",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -174,14 +179,14 @@ def _write_student_absence_csv(path: Path, rows: Iterable[Mapping[str, object]])
         for row in rows:
             writer.writerow(
                 {
-                    "student_id": row.get("student_id", ""),
-                    "student_name": row.get("student_name", ""),
-                    "class_name": row.get("class_name", ""),
-                    "week_absent_lessons": row.get("week_absent_lessons", 0),
-                    "month_absent_lessons": row.get("month_absent_lessons", 0),
-                    "semester_absent_lessons": row.get("semester_absent_lessons", 0),
-                    "ten_plus_periods_count": row.get("ten_plus_periods_count", 0),
-                    "last_ten_plus_period": row.get("last_ten_plus_period", "-"),
+                    "ID учня": row.get("student_id", ""),
+                    "Учень": row.get("student_name", ""),
+                    "Клас": row.get("class_name", ""),
+                    "Н (7 днів)": row.get("week_absent_lessons", 0),
+                    "Н (30 днів)": row.get("month_absent_lessons", 0),
+                    "Н": row.get("semester_absent_lessons", 0),
+                    "К-сть періодів 10+": row.get("ten_plus_periods_count", 0),
+                    "Останній період 10+ (від-до)": row.get("last_ten_plus_period", "-"),
                 }
             )
 
@@ -274,6 +279,24 @@ def _write_ten_day_periods_csv(path: Path, rows: Iterable[Mapping[str, object]])
                     "period_end": row.get("period_end", ""),
                     "learning_days_absent": row.get("learning_days_absent", 0),
                 }
+            )
+
+
+def _write_class_absence_today_yesterday_csv(path: Path, data: Mapping[str, object]) -> None:
+    rows = list(data.get("rows", []) or [])
+    total_today = int(data.get("total_today", 0) or 0)
+    total_yesterday = int(data.get("total_yesterday", 0) or 0)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["клас", "к-сть сьогодні", "к-сть вчора"])
+        writer.writerow(["усього", total_today, total_yesterday])
+        for row in rows:
+            writer.writerow(
+                [
+                    row.get("class_name", ""),
+                    int(row.get("today_count", 0) or 0),
+                    int(row.get("yesterday_count", 0) or 0),
+                ]
             )
 
 

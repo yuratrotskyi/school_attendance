@@ -9,6 +9,7 @@ import shutil
 from typing import Dict, Iterable, List, Optional
 
 from .analytics import (
+    build_class_absence_today_yesterday,
     build_period_summary,
     build_student_risk_list,
     build_ten_day_absence_periods,
@@ -77,6 +78,10 @@ def run_daily(
         run_date=run_date,
         min_learning_days=10,
     )
+    class_daily_absence = build_class_absence_today_yesterday(
+        records=all_records,
+        run_date=run_date,
+    )
 
     _write_incidents_csv(run_proc_dir / "incidents.csv", incidents)
 
@@ -88,6 +93,7 @@ def run_daily(
         incidents=incidents,
         ten_day_summary=ten_day_summary,
         ten_day_periods=ten_day_periods,
+        class_daily_absence=class_daily_absence,
     )
 
     return {

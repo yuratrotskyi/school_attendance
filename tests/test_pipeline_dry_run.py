@@ -1,4 +1,5 @@
 import json
+import csv
 import tempfile
 import unittest
 from datetime import date
@@ -175,6 +176,50 @@ class TestPipelineDryRun(unittest.TestCase):
             )
 
             self.assertNotIn("ten_day_absence_periods_csv", result["paths"])
+
+    def test_run_daily_writes_ukrainian_class_daily_absence_csv(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance.csv"
+            raw_file.write_text(
+                "student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident\n"
+                "123,Іваненко Іван,11-А,2026-03-05,1,ABSENT,UNEXCUSED,false\n"
+                "123,Іваненко Іван,11-А,2026-03-05,2,ABSENT,UNEXCUSED,false\n"
+                "124,Петренко Петро,11-Б,2026-03-05,1,PRESENT,,false\n"
+                "124,Петренко Петро,11-Б,2026-03-04,1,ABSENT,UNEXCUSED,false\n"
+                "125,Сидоренко Сидір,10-А,2026-03-04,1,ABSENT,UNEXCUSED,false\n",
+                encoding="utf-8",
+            )
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            result = run_daily(
+                config=config,
+                run_date=date(2026, 3, 5),
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[raw_file],
+            )
+
+            self.assertIn("class_absence_today_yesterday_csv", result["paths"])
+            path = Path(result["paths"]["class_absence_today_yesterday_csv"])
+            self.assertTrue(path.exists())
+            with path.open(encoding="utf-8") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(["клас", "к-сть сьогодні", "к-сть вчора"], rows[0])
+            self.assertEqual(["усього", "1", "2"], rows[1])
 
 
 if __name__ == "__main__":

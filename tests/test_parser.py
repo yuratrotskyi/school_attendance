@@ -96,8 +96,13 @@ class TestParserAndReporting(unittest.TestCase):
             self.assertTrue((out_dir / "detail.csv").exists())
             self.assertTrue((out_dir / "report.md").exists())
             self.assertTrue((out_dir / "student-absence-summary.csv").exists())
+            self.assertTrue((out_dir / "відсутність-сьогодні-вчора.csv").exists())
             self.assertEqual(str(out_dir / "report.md"), paths["report_md"])
             self.assertEqual(str(out_dir / "student-absence-summary.csv"), paths["student_absence_summary_csv"])
+            self.assertEqual(
+                str(out_dir / "відсутність-сьогодні-вчора.csv"),
+                paths["class_absence_today_yesterday_csv"],
+            )
 
             loaded_summary = json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(2, loaded_summary["week"]["absent_lessons"])
@@ -110,15 +115,15 @@ class TestParserAndReporting(unittest.TestCase):
             with (out_dir / "student-absence-summary.csv").open(encoding="utf-8") as handle:
                 grouped_rows = list(csv.DictReader(handle))
             self.assertEqual(2, len(grouped_rows))
-            self.assertEqual("123", grouped_rows[0]["student_id"])
-            self.assertEqual("124", grouped_rows[1]["student_id"])
-            self.assertEqual("123", grouped_rows[0]["student_id"])
-            self.assertEqual("1", grouped_rows[0]["week_absent_lessons"])
-            self.assertEqual("2", grouped_rows[0]["month_absent_lessons"])
-            self.assertEqual("3", grouped_rows[0]["semester_absent_lessons"])
-            self.assertEqual("1", grouped_rows[1]["week_absent_lessons"])
-            self.assertEqual("1", grouped_rows[1]["month_absent_lessons"])
-            self.assertEqual("1", grouped_rows[1]["semester_absent_lessons"])
+            self.assertEqual("123", grouped_rows[0]["ID учня"])
+            self.assertEqual("124", grouped_rows[1]["ID учня"])
+            self.assertEqual("123", grouped_rows[0]["ID учня"])
+            self.assertEqual("1", grouped_rows[0]["Н (7 днів)"])
+            self.assertEqual("2", grouped_rows[0]["Н (30 днів)"])
+            self.assertEqual("3", grouped_rows[0]["Н"])
+            self.assertEqual("1", grouped_rows[1]["Н (7 днів)"])
+            self.assertEqual("1", grouped_rows[1]["Н (30 днів)"])
+            self.assertEqual("1", grouped_rows[1]["Н"])
 
             report_text = (out_dir / "report.md").read_text(encoding="utf-8")
             self.assertIn("## Пропуски по учнях (Н)", report_text)
@@ -186,8 +191,8 @@ class TestParserAndReporting(unittest.TestCase):
 
             with (out_dir / "student-absence-summary.csv").open(encoding="utf-8") as handle:
                 grouped_rows = list(csv.DictReader(handle))
-            self.assertEqual("2", grouped_rows[0]["ten_plus_periods_count"])
-            self.assertEqual("2026-02-01 - 2026-02-11", grouped_rows[0]["last_ten_plus_period"])
+            self.assertEqual("2", grouped_rows[0]["К-сть періодів 10+"])
+            self.assertEqual("2026-02-01 - 2026-02-11", grouped_rows[0]["Останній період 10+ (від-до)"])
 
             report_text = (out_dir / "report.md").read_text(encoding="utf-8")
             self.assertIn("10+ періодів", report_text)
@@ -196,6 +201,51 @@ class TestParserAndReporting(unittest.TestCase):
             self.assertIn("ten_day_absence_periods_csv", paths)
             periods_path = out_dir / "ten-day-absence-periods.csv"
             self.assertTrue(periods_path.exists())
+
+    def test_student_absence_summary_headers_are_ukrainian(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            records = [
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=2,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                )
+            ]
+            summary = {
+                "week": {"absent_lessons": 1, "period_start": "2026-02-27", "period_end": "2026-03-04"},
+                "month": {"absent_lessons": 1, "period_start": "2026-02-04", "period_end": "2026-03-04"},
+                "semester": {"absent_lessons": 1, "period_start": "2026-01-12", "period_end": "2026-03-04"},
+            }
+
+            write_report_bundle(
+                out_dir=out_dir,
+                run_date=date(2026, 3, 4),
+                summary=summary,
+                records=records,
+                incidents=[],
+            )
+
+            with (out_dir / "student-absence-summary.csv").open(encoding="utf-8") as handle:
+                headers = next(csv.reader(handle))
+
+            self.assertEqual(
+                [
+                    "ID учня",
+                    "Учень",
+                    "Клас",
+                    "Н (7 днів)",
+                    "Н (30 днів)",
+                    "Н",
+                    "К-сть періодів 10+",
+                    "Останній період 10+ (від-до)",
+                ],
+                headers,
+            )
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 
 from school_attendance.analytics import (
+    build_class_absence_today_yesterday,
     build_period_summary,
     build_student_risk_list,
     build_ten_day_absence_periods,
@@ -99,6 +100,31 @@ class TestKpiMetrics(unittest.TestCase):
         self.assertEqual(2, len(s1_periods))
         self.assertEqual(10, s1_periods[0]["learning_days_absent"])
         self.assertEqual(11, s1_periods[1]["learning_days_absent"])
+
+    def test_build_class_absence_today_yesterday_counts_and_sorting(self):
+        run_date = date(2026, 3, 5)
+        rows = [
+            self._record("1", "A", date(2026, 3, 5), 1, "ABSENT", class_name="11-А"),
+            self._record("1", "A", date(2026, 3, 5), 2, "ABSENT", class_name="11-А"),
+            self._record("2", "B", date(2026, 3, 5), 1, "PRESENT", class_name="11-А"),
+            self._record("1", "A", date(2026, 3, 4), 1, "ABSENT", class_name="11-А"),
+            self._record("3", "C", date(2026, 3, 5), 1, "ABSENT", class_name="11-Б"),
+            self._record("4", "D", date(2026, 3, 4), 1, "PRESENT", class_name="11-Б"),
+            self._record("5", "E", date(2026, 3, 5), 1, "PRESENT", class_name="10-А"),
+            self._record("5", "E", date(2026, 3, 4), 1, "ABSENT", class_name="10-А"),
+        ]
+
+        got = build_class_absence_today_yesterday(rows, run_date=run_date)
+
+        self.assertEqual(2, got["total_today"])
+        self.assertEqual(2, got["total_yesterday"])
+        self.assertEqual(["11-А", "11-Б", "10-А"], [row["class_name"] for row in got["rows"]])
+        self.assertEqual(1, got["rows"][0]["today_count"])
+        self.assertEqual(1, got["rows"][0]["yesterday_count"])
+        self.assertEqual(1, got["rows"][1]["today_count"])
+        self.assertEqual(0, got["rows"][1]["yesterday_count"])
+        self.assertEqual(0, got["rows"][2]["today_count"])
+        self.assertEqual(1, got["rows"][2]["yesterday_count"])
 
 
 if __name__ == "__main__":
