@@ -108,6 +108,74 @@ class TestPipelineDryRun(unittest.TestCase):
             self.assertFalse(stale_proc.exists())
             self.assertFalse(stale_out.exists())
 
+    def test_run_daily_writes_ten_day_periods_csv_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance.csv"
+            lines = ["student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident"]
+            for day in range(12, 22):
+                lines.append(f"123,Іваненко Іван,7-А,2026-01-{day:02d},1,ABSENT,UNEXCUSED,false")
+            raw_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            result = run_daily(
+                config=config,
+                run_date=date(2026, 1, 21),
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[raw_file],
+            )
+
+            self.assertIn("ten_day_absence_periods_csv", result["paths"])
+            periods_path = Path(result["paths"]["ten_day_absence_periods_csv"])
+            self.assertTrue(periods_path.exists())
+
+    def test_run_daily_skips_ten_day_periods_csv_when_absent(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance.csv"
+            lines = ["student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident"]
+            for day in range(12, 21):
+                lines.append(f"123,Іваненко Іван,7-А,2026-01-{day:02d},1,ABSENT,UNEXCUSED,false")
+            raw_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            result = run_daily(
+                config=config,
+                run_date=date(2026, 1, 20),
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[raw_file],
+            )
+
+            self.assertNotIn("ten_day_absence_periods_csv", result["paths"])
+
 
 if __name__ == "__main__":
     unittest.main()

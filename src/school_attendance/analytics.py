@@ -2,7 +2,7 @@
 
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Dict, Iterable, List, Sequence, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .models import AttendanceRecord
 
@@ -176,3 +176,92 @@ def build_student_risk_list(
 
     risk_rows.sort(key=lambda r: (-r["absence_rate"], r["class_name"], r["student_name"]))
     return risk_rows
+
+
+def build_ten_day_absence_periods(
+    records: Sequence[AttendanceRecord],
+    semester_start: date,
+    run_date: date,
+    min_learning_days: int = 10,
+) -> Tuple[Dict[str, Dict[str, object]], List[Dict[str, object]]]:
+    """Build 10+ learning-day absence periods for semester window."""
+
+    learning_days: Dict[str, Dict[date, List[AttendanceRecord]]] = defaultdict(lambda: defaultdict(list))
+    student_meta: Dict[str, AttendanceRecord] = {}
+
+    for row in records:
+        if row.lesson_date < semester_start or row.lesson_date > run_date:
+            continue
+        learning_days[row.student_id][row.lesson_date].append(row)
+        student_meta.setdefault(row.student_id, row)
+
+    by_student: Dict[str, Dict[str, object]] = {}
+    periods: List[Dict[str, object]] = []
+
+    for student_id, days_map in learning_days.items():
+        ordered_days = sorted(days_map.keys())
+        if not ordered_days:
+            continue
+
+        current_start: Optional[date] = None
+        current_end: Optional[date] = None
+        current_length = 0
+        student_periods: List[Dict[str, object]] = []
+        meta = student_meta[student_id]
+
+        for lesson_day in ordered_days:
+            rows = days_map[lesson_day]
+            is_absent_day = any(item.status == "ABSENT" for item in rows)
+
+            if is_absent_day:
+                if current_start is None:
+                    current_start = lesson_day
+                    current_end = lesson_day
+                    current_length = 1
+                else:
+                    current_end = lesson_day
+                    current_length += 1
+                continue
+
+            if current_start is not None and current_end is not None and current_length >= min_learning_days:
+                student_periods.append(
+                    {
+                        "student_id": student_id,
+                        "student_name": meta.student_name,
+                        "class_name": meta.class_name,
+                        "period_start": current_start.isoformat(),
+                        "period_end": current_end.isoformat(),
+                        "learning_days_absent": current_length,
+                    }
+                )
+
+            current_start = None
+            current_end = None
+            current_length = 0
+
+        if current_start is not None and current_end is not None and current_length >= min_learning_days:
+            student_periods.append(
+                {
+                    "student_id": student_id,
+                    "student_name": meta.student_name,
+                    "class_name": meta.class_name,
+                    "period_start": current_start.isoformat(),
+                    "period_end": current_end.isoformat(),
+                    "learning_days_absent": current_length,
+                }
+            )
+
+        if not student_periods:
+            continue
+
+        student_periods.sort(key=lambda item: (item["period_end"], item["period_start"]))
+        last_period = student_periods[-1]
+        by_student[student_id] = {
+            "ten_plus_periods_count": len(student_periods),
+            "last_period_start": last_period["period_start"],
+            "last_period_end": last_period["period_end"],
+        }
+        periods.extend(student_periods)
+
+    periods.sort(key=lambda item: (item["class_name"], item["student_name"], item["period_start"]))
+    return by_student, periods

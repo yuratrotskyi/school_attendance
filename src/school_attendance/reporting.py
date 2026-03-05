@@ -17,6 +17,8 @@ def write_report_bundle(
     summary: Mapping[str, Mapping[str, object]],
     records: Iterable[AttendanceRecord],
     incidents: Iterable[Mapping[str, object]],
+    ten_day_summary: Optional[Mapping[str, Mapping[str, object]]] = None,
+    ten_day_periods: Optional[Iterable[Mapping[str, object]]] = None,
 ) -> Dict[str, str]:
     """Write summary JSON, details CSV and markdown report bundle."""
 
@@ -27,9 +29,12 @@ def write_report_bundle(
     detail_path = out_dir / "detail.csv"
     grouped_path = out_dir / "student-absence-summary.csv"
     report_md_path = out_dir / "report.md"
+    ten_day_periods_path = out_dir / "ten-day-absence-periods.csv"
     records_list = list(records)
     incidents_list = list(incidents)
-    grouped_rows = _build_student_absence_rows(records_list, summary)
+    ten_day_summary_map = ten_day_summary or {}
+    ten_day_periods_list = list(ten_day_periods or [])
+    grouped_rows = _build_student_absence_rows(records_list, summary, ten_day_summary_map)
 
     summary_path.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
@@ -40,12 +45,17 @@ def write_report_bundle(
     _write_student_absence_csv(grouped_path, grouped_rows)
     _write_report_markdown(report_md_path, run_date, summary, incidents_list, grouped_rows)
 
-    return {
+    paths = {
         "summary_json": str(summary_path),
         "detail_csv": str(detail_path),
         "student_absence_summary_csv": str(grouped_path),
         "report_md": str(report_md_path),
     }
+    if ten_day_periods_list:
+        _write_ten_day_periods_csv(ten_day_periods_path, ten_day_periods_list)
+        paths["ten_day_absence_periods_csv"] = str(ten_day_periods_path)
+
+    return paths
 
 
 def _write_detail_csv(path: Path, records: Iterable[AttendanceRecord]) -> None:
@@ -106,18 +116,20 @@ def _write_report_markdown(
     else:
         lines.extend(
             [
-                "| Учень | Клас | 7 днів | 30 днів | Семестр |",
-                "|---|---|---:|---:|---:|",
+                "| Учень | Клас | 7 днів | 30 днів | Семестр | 10+ періодів (семестр) | Останній 10+ період (від-до) |",
+                "|---|---|---:|---:|---:|---:|---|",
             ]
         )
         for row in grouped_list:
             lines.append(
-                "| {name} | {klass} | {week_count} | {month_count} | {semester_count} |".format(
+                "| {name} | {klass} | {week_count} | {month_count} | {semester_count} | {periods_count} | {last_period} |".format(
                     name=row.get("student_name", "-"),
                     klass=row.get("class_name", "-"),
                     week_count=row.get("week_absent_lessons", 0),
                     month_count=row.get("month_absent_lessons", 0),
                     semester_count=row.get("semester_absent_lessons", 0),
+                    periods_count=row.get("ten_plus_periods_count", 0),
+                    last_period=row.get("last_ten_plus_period", "-"),
                 )
             )
 
@@ -153,6 +165,8 @@ def _write_student_absence_csv(path: Path, rows: Iterable[Mapping[str, object]])
         "week_absent_lessons",
         "month_absent_lessons",
         "semester_absent_lessons",
+        "ten_plus_periods_count",
+        "last_ten_plus_period",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -166,6 +180,8 @@ def _write_student_absence_csv(path: Path, rows: Iterable[Mapping[str, object]])
                     "week_absent_lessons": row.get("week_absent_lessons", 0),
                     "month_absent_lessons": row.get("month_absent_lessons", 0),
                     "semester_absent_lessons": row.get("semester_absent_lessons", 0),
+                    "ten_plus_periods_count": row.get("ten_plus_periods_count", 0),
+                    "last_ten_plus_period": row.get("last_ten_plus_period", "-"),
                 }
             )
 
@@ -173,6 +189,7 @@ def _write_student_absence_csv(path: Path, rows: Iterable[Mapping[str, object]])
 def _build_student_absence_rows(
     records: Iterable[AttendanceRecord],
     summary: Mapping[str, Mapping[str, object]],
+    ten_day_summary: Mapping[str, Mapping[str, object]],
 ) -> List[Dict[str, object]]:
     bounds = {
         "week": _extract_period_bounds(summary, "week"),
@@ -194,6 +211,8 @@ def _build_student_absence_rows(
                 "week_absent_lessons": 0,
                 "month_absent_lessons": 0,
                 "semester_absent_lessons": 0,
+                "ten_plus_periods_count": 0,
+                "last_ten_plus_period": "-",
             }
 
         if _in_period(row.lesson_date, bounds["week"]):
@@ -211,6 +230,16 @@ def _build_student_absence_rows(
         or int(row.get("month_absent_lessons", 0))
         or int(row.get("semester_absent_lessons", 0))
     ]
+    for row in rows:
+        student_id = str(row.get("student_id", ""))
+        ten_day = ten_day_summary.get(student_id, {})
+        count = int(ten_day.get("ten_plus_periods_count", 0) or 0)
+        start = str(ten_day.get("last_period_start", "") or "").strip()
+        end = str(ten_day.get("last_period_end", "") or "").strip()
+        period_text = f"{start} - {end}" if start and end else "-"
+        row["ten_plus_periods_count"] = count
+        row["last_ten_plus_period"] = period_text
+
     rows.sort(
         key=lambda row: (
             -int(row.get("semester_absent_lessons", 0)),
@@ -221,6 +250,31 @@ def _build_student_absence_rows(
         )
     )
     return rows
+
+
+def _write_ten_day_periods_csv(path: Path, rows: Iterable[Mapping[str, object]]) -> None:
+    fields = [
+        "student_id",
+        "student_name",
+        "class_name",
+        "period_start",
+        "period_end",
+        "learning_days_absent",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "student_id": row.get("student_id", ""),
+                    "student_name": row.get("student_name", ""),
+                    "class_name": row.get("class_name", ""),
+                    "period_start": row.get("period_start", ""),
+                    "period_end": row.get("period_end", ""),
+                    "learning_days_absent": row.get("learning_days_absent", 0),
+                }
+            )
 
 
 def _extract_period_bounds(

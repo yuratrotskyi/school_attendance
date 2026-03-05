@@ -1,7 +1,11 @@
 import unittest
 from datetime import date
 
-from school_attendance.analytics import build_period_summary, build_student_risk_list
+from school_attendance.analytics import (
+    build_period_summary,
+    build_student_risk_list,
+    build_ten_day_absence_periods,
+)
 from school_attendance.models import AttendanceRecord
 
 
@@ -66,6 +70,35 @@ class TestKpiMetrics(unittest.TestCase):
 
         self.assertEqual(["1", "2"], [row["student_id"] for row in risk])
         self.assertEqual(0.6667, risk[0]["absence_rate"])
+
+    def test_build_ten_day_absence_periods_returns_multiple_periods(self):
+        rows = []
+        for day in range(12, 22):
+            rows.append(self._record("s1", "Student One", date(2026, 1, day), 1, "ABSENT"))
+        rows.append(self._record("s1", "Student One", date(2026, 1, 22), 1, "PRESENT"))
+        for day in range(1, 12):
+            rows.append(self._record("s1", "Student One", date(2026, 2, day), 1, "ABSENT"))
+
+        for day in range(1, 10):
+            rows.append(self._record("s2", "Student Two", date(2026, 2, day), 1, "ABSENT"))
+        rows.append(self._record("s2", "Student Two", date(2026, 2, 10), 1, "PRESENT"))
+
+        student_summary, periods = build_ten_day_absence_periods(
+            records=rows,
+            semester_start=date(2026, 1, 12),
+            run_date=date(2026, 3, 4),
+            min_learning_days=10,
+        )
+
+        self.assertEqual(2, student_summary["s1"]["ten_plus_periods_count"])
+        self.assertEqual("2026-02-01", student_summary["s1"]["last_period_start"])
+        self.assertEqual("2026-02-11", student_summary["s1"]["last_period_end"])
+        self.assertNotIn("s2", student_summary)
+
+        s1_periods = [item for item in periods if item["student_id"] == "s1"]
+        self.assertEqual(2, len(s1_periods))
+        self.assertEqual(10, s1_periods[0]["learning_days_absent"])
+        self.assertEqual(11, s1_periods[1]["learning_days_absent"])
 
 
 if __name__ == "__main__":

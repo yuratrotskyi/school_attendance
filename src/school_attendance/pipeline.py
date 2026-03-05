@@ -8,7 +8,12 @@ from pathlib import Path
 import shutil
 from typing import Dict, Iterable, List, Optional
 
-from .analytics import build_period_summary, build_student_risk_list, detect_escape_incidents
+from .analytics import (
+    build_period_summary,
+    build_student_risk_list,
+    build_ten_day_absence_periods,
+    detect_escape_incidents,
+)
 from .collector import collect_raw_exports
 from .config import AppConfig
 from .models import AttendanceRecord
@@ -66,6 +71,12 @@ def run_daily(
         risk_threshold=config.risk_threshold,
     )
     summary["week"]["risk_students"] = len(risk_students)
+    ten_day_summary, ten_day_periods = build_ten_day_absence_periods(
+        records=all_records,
+        semester_start=config.semester_start,
+        run_date=run_date,
+        min_learning_days=10,
+    )
 
     _write_incidents_csv(run_proc_dir / "incidents.csv", incidents)
 
@@ -75,6 +86,8 @@ def run_daily(
         summary=summary,
         records=all_records,
         incidents=incidents,
+        ten_day_summary=ten_day_summary,
+        ten_day_periods=ten_day_periods,
     )
 
     return {
