@@ -8,11 +8,14 @@ from school_attendance.collector import (
     _extract_class_name_hint,
     _extract_dates_from_topics,
     _extract_candidate_journal_hrefs,
+    _filter_excluded_journal_links,
     _is_journal_href,
+    _is_excluded_subject_text,
     _looks_like_class_chip_label,
     _normalize_journal_rows,
     _pick_first_pagination_href,
     _pick_next_pagination_href,
+    _resolve_excluded_subject_titles,
     _resolve_date_from_day_and_month,
     _write_journal_records_csv,
 )
@@ -143,6 +146,31 @@ class TestCollectorJournalRecords(unittest.TestCase):
         self.assertIn("/journal?id=456", got)
         self.assertIn("https://nz.ua/journal/987", got)
         self.assertNotIn("https://nz.ua/journal/list?page=2", got)
+
+    def test_is_excluded_subject_text_matches_default_subjects(self):
+        titles = _resolve_excluded_subject_titles({})
+
+        self.assertTrue(_is_excluded_subject_text("Облік проведення навчальних екскурсій та практики", titles))
+        self.assertTrue(
+            _is_excluded_subject_text(
+                "Облік проведення бесід, інструктажів, заходів з безпеки життєдіяльності",
+                titles,
+            )
+        )
+        self.assertTrue(_is_excluded_subject_text("Зауваження до ведення класного журналу", titles))
+        self.assertFalse(_is_excluded_subject_text("Алгебра", titles))
+
+    def test_filter_excluded_journal_links_removes_amp_variants(self):
+        links = [
+            "/journal/index?journal=1&subgroup=10",
+            "/journal/index?journal=1&amp;subgroup=10",
+            "https://nz.ua/journal/index?journal=2&subgroup=20",
+        ]
+        excluded_links = ["/journal/index?journal=1&subgroup=10"]
+
+        got = _filter_excluded_journal_links(links, excluded_links, base_url="https://nz.ua")
+
+        self.assertEqual(["https://nz.ua/journal/index?journal=2&subgroup=20"], got)
 
     def test_detects_class_chip_label(self):
         self.assertTrue(_looks_like_class_chip_label("5-А(I група)"))

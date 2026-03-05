@@ -35,6 +35,12 @@ _UK_MONTH_MAP = {
     "груд": 12,
 }
 
+_DEFAULT_EXCLUDED_SUBJECT_TITLES = (
+    "Облік проведення навчальних екскурсій та практики",
+    "Облік проведення бесід, інструктажів, заходів з безпеки життєдіяльності",
+    "Зауваження до ведення класного журналу",
+)
+
 
 def _build_context_kwargs(config: AppConfig) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {"accept_downloads": True}
@@ -286,6 +292,7 @@ def _collect_journal_links(
 ) -> List[str]:
     link_selector = list_cfg.get("link_selector", 'a[href*="/journal/"]')
     next_selector = list_cfg.get("next_page_selector", ".pagination a[rel='next'], .pagination li.next a")
+    excluded_subject_titles = _resolve_excluded_subject_titles(list_cfg)
     wait_ms = int(list_cfg.get("wait_ms", 1300))
     max_pages = int(list_cfg.get("max_pages", 50))
 
@@ -306,7 +313,12 @@ def _collect_journal_links(
         if _is_journal_href(page.url):
             return _collect_paginated_links(pages=[{"links": [page.url], "next": None}], base_url=base_url)
 
-        links = _extract_links_from_page(page=page, link_selector=link_selector, list_url=list_url)
+        links = _extract_links_from_page(
+            page=page,
+            link_selector=link_selector,
+            base_url=base_url,
+            excluded_subject_titles=excluded_subject_titles,
+        )
         if not links:
             discovered = _discover_journal_links_by_click(
                 page=page,
@@ -333,8 +345,44 @@ def _collect_journal_links(
     return _collect_paginated_links(pages=pages, base_url=base_url)
 
 
-def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> List[str]:
+def _resolve_excluded_subject_titles(list_cfg: Dict[str, Any]) -> List[str]:
+    configured = list_cfg.get("exclude_subject_titles", [])
+    titles = list(_DEFAULT_EXCLUDED_SUBJECT_TITLES)
+    if isinstance(configured, str):
+        titles.append(configured)
+    elif isinstance(configured, Sequence):
+        titles.extend(str(item) for item in configured)
+
+    normalized: List[str] = []
+    seen: set = set()
+    for item in titles:
+        value = _normalize_subject_title(item)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def _normalize_subject_title(text: Any) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _is_excluded_subject_text(subject_text: Any, excluded_subject_titles: Sequence[str]) -> bool:
+    token = _normalize_subject_title(subject_text)
+    if not token:
+        return False
+    return any(excluded in token for excluded in excluded_subject_titles)
+
+
+def _extract_links_from_page(
+    page: Any,
+    link_selector: str,
+    base_url: str,
+    excluded_subject_titles: Sequence[str],
+) -> List[str]:
     raw_values: List[str] = []
+    excluded_raw_values: List[str] = []
     locator = page.locator(link_selector)
     count = locator.count()
     if count == 0 and link_selector != "a":
@@ -343,10 +391,15 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
 
     for idx in range(count):
         node = locator.nth(idx)
+        subject_text = _safe_locator_text(node)
         href = (node.get_attribute("href") or "").strip()
         data_href = (node.get_attribute("data-href") or node.get_attribute("data-url") or "").strip()
         onclick = (node.get_attribute("onclick") or "").strip()
-        raw_values.extend([href, data_href, onclick])
+        values = [href, data_href, onclick]
+        if _is_excluded_subject_text(subject_text, excluded_subject_titles):
+            excluded_raw_values.extend(values)
+            continue
+        raw_values.extend(values)
 
     try:
         attr_values = page.eval_on_selector_all(
@@ -362,7 +415,46 @@ def _extract_links_from_page(page: Any, link_selector: str, list_url: str) -> Li
     except Exception:
         pass
 
-    return _extract_candidate_journal_hrefs(raw_values)
+    links = _extract_candidate_journal_hrefs(raw_values)
+    if not excluded_raw_values:
+        return links
+
+    excluded_links = _extract_candidate_journal_hrefs(excluded_raw_values)
+    if not excluded_links:
+        return links
+
+    return _filter_excluded_journal_links(links, excluded_links, base_url=base_url)
+
+
+def _filter_excluded_journal_links(links: Sequence[str], excluded_links: Sequence[str], base_url: str) -> List[str]:
+    excluded_canonical = {
+        canonical
+        for canonical in (_canonicalize_journal_link(link, base_url=base_url) for link in excluded_links)
+        if canonical
+    }
+    if not excluded_canonical:
+        return list(links)
+
+    filtered: List[str] = []
+    for link in links:
+        canonical = _canonicalize_journal_link(link, base_url=base_url)
+        if canonical and canonical in excluded_canonical:
+            continue
+        filtered.append(link)
+    return filtered
+
+
+def _canonicalize_journal_link(link: Any, base_url: str) -> Optional[str]:
+    normalized = _normalize_collectable_journal_url(raw_link=link, base_url=base_url)
+    if normalized:
+        return normalized
+
+    token = (str(link or "")).strip().replace("\\/", "/")
+    if not token:
+        return None
+    if not _is_journal_href(token):
+        return None
+    return token
 
 
 def _discover_journal_links_by_click(
