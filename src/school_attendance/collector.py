@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 import html
 import json
@@ -79,6 +80,7 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
         page = context.new_page()
 
         _ensure_authenticated(page=page, config=config, selector_cfg=selector_cfg)
+        context.storage_state(path=str(config.session_state_path))
 
         records = _collect_journal_attendance_records(page=page, config=config, selector_cfg=selector_cfg)
         if not records:
@@ -123,6 +125,7 @@ def _ensure_authenticated(page: Any, config: AppConfig, selector_cfg: Dict[str, 
 def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     journal_cfg = selector_cfg.get("journal_list", {})
     list_url = journal_cfg.get("url", f"{config.base_url}/journal/list")
+    workers = max(1, int(journal_cfg.get("workers", 1)))
 
     journal_urls = _collect_journal_links(
         page=page,
@@ -139,6 +142,38 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
             "Update config.journal_list.link_selector or check logs/artifacts for journal-list-no-links*.html"
         )
 
+    if workers > 1:
+        all_records = _collect_journal_records_parallel(
+            journal_urls=journal_urls,
+            workers=workers,
+            config=config,
+            selector_cfg=selector_cfg,
+        )
+    else:
+        all_records = _collect_journal_records_sequential(
+            journal_urls=journal_urls,
+            page=page,
+            config=config,
+            selector_cfg=selector_cfg,
+        )
+
+    deduped = _deduplicate_normalized_records(all_records)
+    if not deduped:
+        _write_text_artifact(
+            logs_dir=config.logs_dir,
+            stem="journal-no-records",
+            content="\n".join(journal_urls),
+            suffix="urls.txt",
+        )
+    return deduped
+
+
+def _collect_journal_records_sequential(
+    journal_urls: Sequence[str],
+    page: Any,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     all_records: List[Dict[str, Any]] = []
     empty_debug_written = 0
     for journal_url in journal_urls:
@@ -162,16 +197,83 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
                 empty_debug_written += 1
             continue
         all_records.extend(rows)
+    return all_records
 
-    deduped = _deduplicate_normalized_records(all_records)
-    if not deduped:
-        _write_text_artifact(
-            logs_dir=config.logs_dir,
-            stem="journal-no-records",
-            content="\n".join(journal_urls),
-            suffix="urls.txt",
+
+def _collect_journal_records_parallel(
+    journal_urls: Sequence[str],
+    workers: int,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    all_records: List[Dict[str, Any]] = []
+    empty_debug_written = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_url = {
+            executor.submit(
+                _collect_single_journal_records_with_worker,
+                journal_url,
+                config,
+                selector_cfg,
+            ): journal_url
+            for journal_url in journal_urls
+        }
+
+        for future in as_completed(future_to_url):
+            journal_url = future_to_url[future]
+            try:
+                rows = future.result()
+            except CollectorError:
+                raise
+            except Exception as exc:
+                print(f"[collector] Skip journal {journal_url}: {exc}")
+                continue
+
+            if not rows:
+                if empty_debug_written < 3:
+                    journal_id = _extract_journal_id(journal_url)
+                    _write_text_artifact(
+                        logs_dir=config.logs_dir,
+                        stem=f"journal-empty-{journal_id}",
+                        content=journal_url,
+                        suffix="url.txt",
+                    )
+                    empty_debug_written += 1
+                continue
+
+            all_records.extend(rows)
+
+    return all_records
+
+
+def _collect_single_journal_records_with_worker(
+    journal_url: str,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise CollectorError(
+            "Playwright is not installed. Run: pip install -r requirements.txt && playwright install chromium"
+        ) from exc
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(**_build_launch_kwargs(config))
+        context = browser.new_context(**_build_context_kwargs(config))
+        page = context.new_page()
+
+        rows = _collect_single_journal_records(
+            page=page,
+            journal_url=journal_url,
+            base_url=config.base_url,
+            selector_cfg=selector_cfg,
+            config=config,
         )
-    return deduped
+        context.close()
+        browser.close()
+    return rows
 
 
 def _collect_journal_links(

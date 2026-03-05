@@ -40,6 +40,50 @@ class TestCollectorErrorHandling(unittest.TestCase):
                 selector_cfg={"journal_list": {}},
             )
 
+    @patch("school_attendance.collector._collect_journal_records_parallel")
+    @patch("school_attendance.collector._collect_journal_records_sequential")
+    @patch("school_attendance.collector._collect_journal_links")
+    def test_uses_parallel_collection_when_workers_gt_one(
+        self,
+        mock_collect_links,
+        mock_collect_sequential,
+        mock_collect_parallel,
+    ):
+        mock_collect_links.return_value = ["https://nz.ua/journal?id=123"]
+        mock_collect_parallel.return_value = []
+        mock_collect_sequential.return_value = []
+
+        _collect_journal_attendance_records(
+            page=_DummyPage(),
+            config=self._config(),
+            selector_cfg={"journal_list": {"workers": 2}},
+        )
+
+        mock_collect_parallel.assert_called_once()
+        mock_collect_sequential.assert_not_called()
+
+    @patch("school_attendance.collector._collect_journal_records_parallel")
+    @patch("school_attendance.collector._collect_journal_records_sequential")
+    @patch("school_attendance.collector._collect_journal_links")
+    def test_uses_sequential_collection_when_workers_eq_one(
+        self,
+        mock_collect_links,
+        mock_collect_sequential,
+        mock_collect_parallel,
+    ):
+        mock_collect_links.return_value = ["https://nz.ua/journal?id=123"]
+        mock_collect_parallel.return_value = []
+        mock_collect_sequential.return_value = []
+
+        _collect_journal_attendance_records(
+            page=_DummyPage(),
+            config=self._config(),
+            selector_cfg={"journal_list": {"workers": 1}},
+        )
+
+        mock_collect_sequential.assert_called_once()
+        mock_collect_parallel.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

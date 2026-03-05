@@ -1,11 +1,11 @@
 {
   "login_url": "https://nz.ua/",
   "open_login_button_selector": "text=Увійти",
-  "open_login_wait_ms": 1200,
+  "open_login_wait_ms": 500,
   "login_selector": "#loginform-login",
   "password_selector": "#loginform-password",
   "submit_selector": "button[name=\"login-button\"]",
-  "post_login_wait_ms": 7000,
+  "post_login_wait_ms": 1200,
   "cloudflare_wait_seconds": 180,
   "cloudflare_notice_after_seconds": 5,
   "auth_success_selectors": [
@@ -16,8 +16,9 @@
     "url": "https://nz.ua/journal/list",
     "link_selector": "a[href*=\"/journal/\"]",
     "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
-    "wait_ms": 1500,
-    "max_pages": 50
+    "wait_ms": 300,
+    "max_pages": 50,
+    "workers": 2
   },
   "journal_page": {
     "api_first": true,
@@ -30,7 +31,7 @@
     "mark_lesson_attr": "data-lesson-no",
     "mark_text_attr": null,
     "next_page_selector": ".pagination a[rel=\"next\"], .pagination li.next a",
-    "wait_ms": 1500,
+    "wait_ms": 300,
     "max_pages": 20
   }
 }
