@@ -27,6 +27,20 @@ class TestParserAndReporting(unittest.TestCase):
             self.assertEqual(date(2026, 3, 4), rows[0].lesson_date)
             self.assertEqual("ABSENT", rows[0].status)
 
+    def test_parse_attendance_csv_normalizes_class_subgroup_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            csv_path = Path(tmp_dir) / "attendance.csv"
+            csv_path.write_text(
+                "student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident\n"
+                "123,Іваненко Іван,8-В (ІІ підгрупа),2026-03-04,2,ABSENT,UNEXCUSED,false\n",
+                encoding="utf-8",
+            )
+
+            rows = parse_attendance_csv(csv_path)
+
+            self.assertEqual(1, len(rows))
+            self.assertEqual("8-В", rows[0].class_name)
+
     def test_write_report_bundle_creates_output_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_dir = Path(tmp_dir) / "out"

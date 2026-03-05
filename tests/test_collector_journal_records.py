@@ -241,8 +241,25 @@ class TestCollectorJournalRecords(unittest.TestCase):
         from_title = _extract_class_name_hint("Журнал 6-А (І група підгрупа) | Нові знання")
         from_header = _extract_class_name_hint("Журнал оцінок для 5-А (I група підгрупа) [Інформатика]")
 
-        self.assertEqual("6-А (І група підгрупа)", from_title)
-        self.assertEqual("5-А (I група підгрупа)", from_header)
+        self.assertEqual("6-А", from_title)
+        self.assertEqual("5-А", from_header)
+
+    def test_normalize_journal_rows_normalizes_class_name(self):
+        rows = [
+            {
+                "student_id": "1",
+                "student_name": "Іваненко Іван",
+                "class_name": "8-В (ІІ підгрупа)",
+                "date": "2026-03-04",
+                "lesson_no": 2,
+                "mark": "Н",
+            }
+        ]
+
+        got = _normalize_journal_rows(rows, journal_id="j-1")
+
+        self.assertEqual(1, len(got))
+        self.assertEqual("8-В", got[0]["class_name"])
 
     def test_write_raw_csv_from_normalized_records(self):
         records = [

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
+from .classname import normalize_class_name
 from .models import AttendanceRecord
 
 
@@ -40,7 +41,7 @@ def parse_attendance_csv(path: Path) -> List[AttendanceRecord]:
                 AttendanceRecord(
                     student_id=(row[mapping["student_id"]] or "").strip(),
                     student_name=(row[mapping["student_name"]] or "").strip(),
-                    class_name=(row[mapping["class_name"]] or "").strip(),
+                    class_name=normalize_class_name(row[mapping["class_name"]]),
                     lesson_date=_parse_date(row[mapping["date"]]),
                     lesson_no=int((row[mapping["lesson_no"]] or "0").strip()),
                     status=status,

@@ -11,6 +11,7 @@ import re
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from .classname import normalize_class_name
 from .config import AppConfig
 
 
@@ -553,10 +554,11 @@ def _collect_single_journal_records(
         current_url = next_url
 
     normalized = _normalize_journal_rows(raw_rows=raw_rows, journal_id=journal_id)
-    if class_name_hint:
+    normalized_hint = normalize_class_name(class_name_hint)
+    if normalized_hint:
         for row in normalized:
             if not row["class_name"]:
-                row["class_name"] = class_name_hint
+                row["class_name"] = normalized_hint
     return normalized
 
 
@@ -1027,12 +1029,12 @@ def _extract_class_name(page: Any, page_cfg: Dict[str, Any]) -> str:
             text = _safe_locator_text(locator.first)
             parsed = _extract_class_name_hint(text)
             if parsed:
-                return parsed
+                return normalize_class_name(parsed)
 
     try:
         parsed_title = _extract_class_name_hint(page.title())
         if parsed_title:
-            return parsed_title
+            return normalize_class_name(parsed_title)
     except Exception:
         pass
 
@@ -1054,11 +1056,11 @@ def _extract_class_name_hint(text: Any) -> str:
             continue
         value = match.group(1).strip(" :-")
         if value:
-            return value
+            return normalize_class_name(value)
 
     class_match = re.search(r"\b\d{1,2}\s*[-–]\s*[A-Za-zА-Яа-яІіЇїЄєҐґ](?:\s*\([^)]*\))?", token)
     if class_match:
-        return class_match.group(0).strip()
+        return normalize_class_name(class_match.group(0).strip())
     return ""
 
 
@@ -1213,7 +1215,7 @@ def _normalize_journal_rows(raw_rows: Iterable[Dict[str, Any]], journal_id: str)
             continue
 
         student_id = str(row.get("student_id", "")).strip() or _synthetic_student_id(student_name)
-        class_name = str(row.get("class_name", "")).strip()
+        class_name = normalize_class_name(row.get("class_name", ""))
         date_iso = _normalize_date(row.get("date"))
         lesson_no = _to_int(row.get("lesson_no"))
         if not date_iso or lesson_no is None:
