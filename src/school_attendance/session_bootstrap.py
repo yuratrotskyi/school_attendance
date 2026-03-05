@@ -51,9 +51,14 @@ def bootstrap_session(config: AppConfig, timeout_seconds: int = 300) -> Path:
         page = context.new_page()
 
         page.goto(login_url, wait_until="domcontentloaded")
-        if open_login_button_selector:
-            page.click(open_login_button_selector)
-            page.wait_for_timeout(open_login_wait_ms)
+        _open_login_popup_if_needed(
+            page=page,
+            selector_cfg={
+                "open_login_button_selector": open_login_button_selector,
+                "open_login_wait_ms": open_login_wait_ms,
+                "login_selector": selector_cfg.get("login_selector"),
+            },
+        )
 
         print("Виконайте ручний вхід у відкритому браузері, потім поверніться в термінал.")
         print("Натисніть Enter у терміналі для ручного збереження сесії або дочекайтеся авто-виявлення входу.")
@@ -109,3 +114,16 @@ def _manual_enter_pressed() -> bool:
     except Exception:
         return False
     return True
+
+
+def _open_login_popup_if_needed(page, selector_cfg: dict) -> None:
+    open_login_button_selector = selector_cfg.get("open_login_button_selector")
+    if not open_login_button_selector:
+        return
+
+    login_selector = selector_cfg.get("login_selector")
+    if login_selector and page.locator(login_selector).count() > 0:
+        return
+
+    page.click(open_login_button_selector)
+    page.wait_for_timeout(int(selector_cfg.get("open_login_wait_ms", 1200)))
