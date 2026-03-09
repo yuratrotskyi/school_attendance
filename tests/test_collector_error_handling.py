@@ -3,7 +3,12 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from school_attendance.collector import CollectorError, _collect_journal_attendance_records
+from school_attendance.collector import (
+    CollectorError,
+    _collect_journal_attendance_records,
+    _collect_journal_records_parallel,
+    _split_journal_urls_for_workers,
+)
 from school_attendance.config import AppConfig
 
 
@@ -83,6 +88,57 @@ class TestCollectorErrorHandling(unittest.TestCase):
 
         mock_collect_sequential.assert_called_once()
         mock_collect_parallel.assert_not_called()
+
+    def test_split_journal_urls_for_workers_balances_round_robin(self):
+        urls = ["u1", "u2", "u3", "u4", "u5"]
+        got = _split_journal_urls_for_workers(urls, workers=2)
+        self.assertEqual([["u1", "u3", "u5"], ["u2", "u4"]], got)
+
+    @patch("school_attendance.collector._collect_journal_batch_with_worker")
+    def test_parallel_collection_dispatches_batches_instead_of_per_url(self, mock_collect_batch):
+        urls = ["u1", "u2", "u3", "u4", "u5"]
+        mock_collect_batch.side_effect = lambda batch, *_: [{"url": item} for item in batch]
+
+        rows = _collect_journal_records_parallel(
+            journal_urls=urls,
+            workers=2,
+            config=self._config(),
+            selector_cfg={"journal_page": {}},
+        )
+
+        self.assertEqual(2, mock_collect_batch.call_count)
+        called_batches = [tuple(call.args[0]) for call in mock_collect_batch.call_args_list]
+        self.assertCountEqual([("u1", "u3", "u5"), ("u2", "u4")], called_batches)
+        self.assertEqual(5, len(rows))
+
+    @patch("school_attendance.collector._collect_journal_batch_with_worker")
+    @patch("school_attendance.collector._collect_journal_batch_on_page")
+    def test_parallel_collection_uses_current_page_as_one_worker(
+        self,
+        mock_collect_on_page,
+        mock_collect_batch,
+    ):
+        urls = ["u1", "u2", "u3", "u4", "u5"]
+        mock_collect_on_page.side_effect = lambda *args, **kwargs: [
+            {"url": item} for item in kwargs["journal_urls"]
+        ]
+        mock_collect_batch.side_effect = lambda batch, *_args: [{"url": item} for item in batch]
+
+        rows = _collect_journal_records_parallel(
+            journal_urls=urls,
+            workers=2,
+            config=self._config(),
+            selector_cfg={"journal_page": {}},
+            page=_DummyPage(),
+        )
+
+        mock_collect_on_page.assert_called_once()
+        on_page_batch = tuple(mock_collect_on_page.call_args.kwargs["journal_urls"])
+        worker_batch = tuple(mock_collect_batch.call_args.args[0])
+        self.assertEqual(("u1", "u3", "u5"), on_page_batch)
+        self.assertEqual(("u2", "u4"), worker_batch)
+        self.assertEqual(1, mock_collect_batch.call_count)
+        self.assertEqual(5, len(rows))
 
 
 if __name__ == "__main__":

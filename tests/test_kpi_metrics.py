@@ -126,6 +126,46 @@ class TestKpiMetrics(unittest.TestCase):
         self.assertEqual(0, got["rows"][2]["today_count"])
         self.assertEqual(1, got["rows"][2]["yesterday_count"])
 
+    def test_build_class_absence_today_yesterday_uses_friday_for_monday_run(self):
+        run_date = date(2026, 3, 9)
+        rows = [
+            self._record("1", "A", date(2026, 3, 9), 1, "ABSENT", class_name="11-А"),
+            self._record("2", "B", date(2026, 3, 7), 1, "ABSENT", class_name="11-А"),
+            self._record("3", "C", date(2026, 3, 6), 1, "ABSENT", class_name="10-А"),
+        ]
+
+        got = build_class_absence_today_yesterday(rows, run_date=run_date)
+
+        self.assertEqual(1, got["total_today"])
+        self.assertEqual(1, got["total_yesterday"])
+        by_class = {row["class_name"]: row for row in got["rows"]}
+        self.assertEqual(0, by_class["11-А"]["yesterday_count"])
+        self.assertEqual(1, by_class["10-А"]["yesterday_count"])
+
+    def test_build_ten_day_absence_periods_separates_duplicate_student_ids(self):
+        rows = []
+        for day in range(12, 22):
+            rows.append(self._record("dup", "A", date(2026, 1, day), 1, "ABSENT", class_name="8-А"))
+            rows.append(self._record("dup", "B", date(2026, 1, day), 1, "PRESENT", class_name="10-А"))
+        rows.append(self._record("dup", "A", date(2026, 1, 22), 1, "PRESENT", class_name="8-А"))
+        for day in range(1, 11):
+            rows.append(self._record("dup", "A", date(2026, 2, day), 1, "PRESENT", class_name="8-А"))
+            rows.append(self._record("dup", "B", date(2026, 2, day), 1, "ABSENT", class_name="10-А"))
+        rows.append(self._record("dup", "B", date(2026, 2, 11), 1, "PRESENT", class_name="10-А"))
+
+        student_summary, periods = build_ten_day_absence_periods(
+            records=rows,
+            semester_start=date(2026, 1, 12),
+            run_date=date(2026, 3, 4),
+            min_learning_days=10,
+        )
+
+        self.assertIn("dup::A::8-А", student_summary)
+        self.assertIn("dup::B::10-А", student_summary)
+        self.assertNotIn("dup", student_summary)
+        self.assertEqual({"A", "B"}, {item["student_name"] for item in periods})
+        self.assertEqual({"8-А", "10-А"}, {item["class_name"] for item in periods})
+
 
 if __name__ == "__main__":
     unittest.main()

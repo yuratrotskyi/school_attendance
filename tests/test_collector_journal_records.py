@@ -7,14 +7,18 @@ from school_attendance.collector import (
     _collect_paginated_links,
     _extract_class_name_hint,
     _extract_dates_from_topics,
+    _extract_journal_id,
     _extract_candidate_journal_hrefs,
     _filter_excluded_journal_links,
+    _filter_records_by_include_class_tokens,
+    _is_included_class_text,
     _is_journal_href,
     _is_excluded_subject_text,
     _looks_like_class_chip_label,
     _normalize_journal_rows,
     _pick_first_pagination_href,
     _pick_next_pagination_href,
+    _resolve_include_class_tokens,
     _resolve_excluded_subject_titles,
     _resolve_date_from_day_and_month,
     _write_journal_records_csv,
@@ -123,6 +127,22 @@ class TestCollectorJournalRecords(unittest.TestCase):
 
         self.assertEqual(["https://nz.ua/journal/index?journal=13190998&subgroup=2261045"], got)
 
+    def test_collect_paginated_links_deduplicates_equivalent_journal_url_forms(self):
+        pages = [
+            {
+                "links": [
+                    "/journal/index?journal=13190998&subgroup=2261045&page=8",
+                    "/journal?id=13190998&subgroup=2261045",
+                    "/journal/index?journal=13190998&amp;subgroup=2261045&page=1",
+                ],
+                "next": None,
+            }
+        ]
+
+        got = _collect_paginated_links(pages, base_url="https://nz.ua")
+
+        self.assertEqual(1, len(got))
+
     def test_recognizes_journal_links_with_query_id_format(self):
         self.assertTrue(_is_journal_href("/journal?id=123"))
         self.assertTrue(_is_journal_href("journal?id=123"))
@@ -171,6 +191,26 @@ class TestCollectorJournalRecords(unittest.TestCase):
         got = _filter_excluded_journal_links(links, excluded_links, base_url="https://nz.ua")
 
         self.assertEqual(["https://nz.ua/journal/index?journal=2&subgroup=20"], got)
+
+    def test_is_included_class_text_matches_normalized_class_filter(self):
+        class_tokens = _resolve_include_class_tokens({}, include_classes=["10-А", "8-б"])
+
+        self.assertTrue(_is_included_class_text("10-А Алгебра", class_tokens))
+        self.assertTrue(_is_included_class_text("8-Б (ІІ підгрупа) Історія України", class_tokens))
+        self.assertFalse(_is_included_class_text("7-А Біологія", class_tokens))
+        self.assertTrue(_is_included_class_text("Алгебра", class_tokens))
+
+    def test_filter_records_by_include_class_tokens_keeps_only_selected_classes(self):
+        class_tokens = _resolve_include_class_tokens({}, include_classes=["10-А", "8-б"])
+        rows = [
+            {"student_id": "1", "class_name": "10-А"},
+            {"student_id": "2", "class_name": "8-Б"},
+            {"student_id": "3", "class_name": "7-А"},
+        ]
+
+        got = _filter_records_by_include_class_tokens(rows, class_tokens)
+
+        self.assertEqual(["10-А", "8-Б"], [item["class_name"] for item in got])
 
     def test_detects_class_chip_label(self):
         self.assertTrue(_looks_like_class_chip_label("5-А(I група)"))
@@ -309,6 +349,11 @@ class TestCollectorJournalRecords(unittest.TestCase):
             content = csv_path.read_text(encoding="utf-8")
             self.assertIn("student_id,student_name,class,date,lesson_no,status,reason_code", content)
             self.assertIn("1,Іваненко Іван,7-А,2026-03-04,2,ABSENT,", content)
+
+    def test_extract_journal_id_from_journal_query_param(self):
+        got = _extract_journal_id("https://nz.ua/journal/index?journal=13190998&subgroup=2261045")
+
+        self.assertEqual("13190998", got)
 
 
 if __name__ == "__main__":

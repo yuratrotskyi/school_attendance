@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_daily_parser.add_argument("--dry-run", action="store_true", help="Use only local files")
     run_daily_parser.add_argument("--skip-collect", action="store_true", help="Skip nz.ua data collection")
     run_daily_parser.add_argument("--raw-file", action="append", default=[], help="Path to raw CSV export")
+    run_daily_parser.add_argument("--class", action="append", default=[], dest="classes", help="Collect only specified class (repeatable)")
     run_daily_parser.add_argument("--env-file", default=".env", help="Path to .env file")
 
     bootstrap_parser = subparsers.add_parser(
@@ -53,6 +54,7 @@ def main(argv: Optional[list] = None) -> int:
             dry_run=args.dry_run,
             skip_collect=args.skip_collect,
             raw_files=[Path(p) for p in args.raw_file],
+            include_classes=args.classes,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0

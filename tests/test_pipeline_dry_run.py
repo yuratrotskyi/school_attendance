@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from school_attendance.config import AppConfig
 from school_attendance.pipeline import run_daily
@@ -220,6 +221,47 @@ class TestPipelineDryRun(unittest.TestCase):
                 rows = list(csv.reader(handle))
             self.assertEqual(["клас", "к-сть сьогодні", "к-сть вчора"], rows[0])
             self.assertEqual(["усього", "1", "2"], rows[1])
+
+    @patch("school_attendance.pipeline.collect_raw_exports")
+    def test_run_daily_passes_include_classes_to_collection(self, mock_collect_raw_exports):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance.csv"
+            raw_file.write_text(
+                "student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident\n"
+                "123,Іваненко Іван,10-А,2026-03-05,1,PRESENT,,false\n",
+                encoding="utf-8",
+            )
+            mock_collect_raw_exports.return_value = [raw_file]
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            run_date = date(2026, 3, 5)
+            run_daily(
+                config=config,
+                run_date=run_date,
+                dry_run=False,
+                skip_collect=False,
+                include_classes=["10-А", "8-Б"],
+            )
+
+            mock_collect_raw_exports.assert_called_once_with(
+                config,
+                run_date,
+                include_classes=["10-А", "8-Б"],
+            )
 
 
 if __name__ == "__main__":

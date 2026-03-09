@@ -187,19 +187,22 @@ def build_ten_day_absence_periods(
 ) -> Tuple[Dict[str, Dict[str, object]], List[Dict[str, object]]]:
     """Build 10+ learning-day absence periods for semester window."""
 
-    learning_days: Dict[str, Dict[date, List[AttendanceRecord]]] = defaultdict(lambda: defaultdict(list))
-    student_meta: Dict[str, AttendanceRecord] = {}
+    learning_days: Dict[Tuple[str, str, str], Dict[date, List[AttendanceRecord]]] = defaultdict(lambda: defaultdict(list))
+    student_meta: Dict[Tuple[str, str, str], AttendanceRecord] = {}
 
     for row in records:
         if row.lesson_date < semester_start or row.lesson_date > run_date:
             continue
-        learning_days[row.student_id][row.lesson_date].append(row)
-        student_meta.setdefault(row.student_id, row)
+        identity = (row.student_id, row.student_name, row.class_name)
+        learning_days[identity][row.lesson_date].append(row)
+        student_meta.setdefault(identity, row)
 
     by_student: Dict[str, Dict[str, object]] = {}
+    id_alias: Dict[str, Tuple[str, str]] = {}
     periods: List[Dict[str, object]] = []
 
-    for student_id, days_map in learning_days.items():
+    for identity, days_map in learning_days.items():
+        student_id, student_name, class_name = identity
         ordered_days = sorted(days_map.keys())
         if not ordered_days:
             continue
@@ -208,7 +211,7 @@ def build_ten_day_absence_periods(
         current_end: Optional[date] = None
         current_length = 0
         student_periods: List[Dict[str, object]] = []
-        meta = student_meta[student_id]
+        meta = student_meta[identity]
 
         for lesson_day in ordered_days:
             rows = days_map[lesson_day]
@@ -257,15 +260,28 @@ def build_ten_day_absence_periods(
 
         student_periods.sort(key=lambda item: (item["period_end"], item["period_start"]))
         last_period = student_periods[-1]
-        by_student[student_id] = {
+        summary_item = {
             "ten_plus_periods_count": len(student_periods),
             "last_period_start": last_period["period_start"],
             "last_period_end": last_period["period_end"],
         }
+        composite_key = _student_identity_key(student_id=student_id, student_name=student_name, class_name=class_name)
+        by_student[composite_key] = summary_item
+
+        alias_meta = (student_name, class_name)
+        if student_id not in id_alias:
+            by_student[student_id] = summary_item
+            id_alias[student_id] = alias_meta
+        elif id_alias[student_id] != alias_meta:
+            by_student.pop(student_id, None)
         periods.extend(student_periods)
 
     periods.sort(key=lambda item: (item["class_name"], item["student_name"], item["period_start"]))
     return by_student, periods
+
+
+def _student_identity_key(student_id: str, student_name: str, class_name: str) -> str:
+    return f"{student_id}::{student_name}::{class_name}"
 
 
 def build_class_absence_today_yesterday(
@@ -274,7 +290,7 @@ def build_class_absence_today_yesterday(
 ) -> Dict[str, object]:
     """Build class-level absent-student counts for today and yesterday."""
 
-    yesterday = run_date - timedelta(days=1)
+    yesterday = _previous_school_day(run_date)
     classes: Set[str] = set()
     absent_today: Dict[str, Set[str]] = defaultdict(set)
     absent_yesterday: Dict[str, Set[str]] = defaultdict(set)
@@ -315,6 +331,13 @@ def build_class_absence_today_yesterday(
         "total_yesterday": total_yesterday,
         "rows": rows,
     }
+
+
+def _previous_school_day(run_date: date) -> date:
+    day = run_date - timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
 
 
 def _class_sort_key(class_name: str) -> Tuple[int, int, str, str]:

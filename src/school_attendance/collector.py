@@ -59,7 +59,7 @@ def _build_launch_kwargs(config: AppConfig) -> Dict[str, Any]:
     return kwargs
 
 
-def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
+def collect_raw_exports(config: AppConfig, run_date: date, include_classes: Optional[Sequence[str]] = None) -> List[Path]:
     """Collect raw attendance file from nz.ua journal list.
 
     Requires selector config JSON because nz.ua interface may change.
@@ -88,7 +88,12 @@ def collect_raw_exports(config: AppConfig, run_date: date) -> List[Path]:
         _ensure_authenticated(page=page, config=config, selector_cfg=selector_cfg)
         context.storage_state(path=str(config.session_state_path))
 
-        records = _collect_journal_attendance_records(page=page, config=config, selector_cfg=selector_cfg)
+        records = _collect_journal_attendance_records(
+            page=page,
+            config=config,
+            selector_cfg=selector_cfg,
+            include_classes=include_classes,
+        )
         if not records:
             raise CollectorError("No attendance records collected from journal pages")
 
@@ -128,10 +133,16 @@ def _ensure_authenticated(page: Any, config: AppConfig, selector_cfg: Dict[str, 
         raise CollectorError("Login to nz.ua failed: login form is still visible after submit")
 
 
-def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _collect_journal_attendance_records(
+    page: Any,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+    include_classes: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
     journal_cfg = selector_cfg.get("journal_list", {})
     list_url = journal_cfg.get("url", f"{config.base_url}/journal/list")
     workers = max(1, int(journal_cfg.get("workers", 1)))
+    include_class_tokens = _resolve_include_class_tokens(list_cfg=journal_cfg, include_classes=include_classes)
 
     journal_urls = _collect_journal_links(
         page=page,
@@ -140,6 +151,7 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         list_cfg=journal_cfg,
         config=config,
         selector_cfg=selector_cfg,
+        include_class_tokens=include_class_tokens,
     )
     if not journal_urls:
         _write_debug_artifacts(page=page, logs_dir=config.logs_dir, stem="journal-list-no-links")
@@ -154,6 +166,7 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
             workers=workers,
             config=config,
             selector_cfg=selector_cfg,
+            page=page,
         )
     else:
         all_records = _collect_journal_records_sequential(
@@ -164,6 +177,7 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
         )
 
     deduped = _deduplicate_normalized_records(all_records)
+    deduped = _filter_records_by_include_class_tokens(deduped, include_class_tokens)
     if not deduped:
         _write_text_artifact(
             logs_dir=config.logs_dir,
@@ -175,6 +189,20 @@ def _collect_journal_attendance_records(page: Any, config: AppConfig, selector_c
 
 
 def _collect_journal_records_sequential(
+    journal_urls: Sequence[str],
+    page: Any,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    return _collect_journal_batch_on_page(
+        journal_urls=journal_urls,
+        page=page,
+        config=config,
+        selector_cfg=selector_cfg,
+    )
+
+
+def _collect_journal_batch_on_page(
     journal_urls: Sequence[str],
     page: Any,
     config: AppConfig,
@@ -211,41 +239,45 @@ def _collect_journal_records_parallel(
     workers: int,
     config: AppConfig,
     selector_cfg: Dict[str, Any],
+    page: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
-    all_records: List[Dict[str, Any]] = []
-    empty_debug_written = 0
+    if not journal_urls:
+        return []
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_url = {
-            executor.submit(
-                _collect_single_journal_records_with_worker,
-                journal_url,
+    all_records: List[Dict[str, Any]] = []
+    remote_batches = _split_journal_urls_for_workers(journal_urls=journal_urls, workers=workers)
+    local_batch: List[str] = []
+    if page is not None and remote_batches:
+        local_batch = remote_batches.pop(0)
+
+    future_to_url: Dict[Any, Sequence[str]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, len(remote_batches))) as executor:
+        for batch_urls in remote_batches:
+            future = executor.submit(
+                _collect_journal_batch_with_worker,
+                batch_urls,
                 config,
                 selector_cfg,
-            ): journal_url
-            for journal_url in journal_urls
-        }
+            )
+            future_to_url[future] = batch_urls
+
+        if local_batch:
+            local_rows = _collect_journal_batch_on_page(
+                journal_urls=local_batch,
+                page=page,
+                config=config,
+                selector_cfg=selector_cfg,
+            )
+            all_records.extend(local_rows)
 
         for future in as_completed(future_to_url):
-            journal_url = future_to_url[future]
+            batch_urls = future_to_url[future]
             try:
                 rows = future.result()
             except CollectorError:
                 raise
             except Exception as exc:
-                print(f"[collector] Skip journal {journal_url}: {exc}")
-                continue
-
-            if not rows:
-                if empty_debug_written < 3:
-                    journal_id = _extract_journal_id(journal_url)
-                    _write_text_artifact(
-                        logs_dir=config.logs_dir,
-                        stem=f"journal-empty-{journal_id}",
-                        content=journal_url,
-                        suffix="url.txt",
-                    )
-                    empty_debug_written += 1
+                print(f"[collector] Skip journal batch ({len(batch_urls)} journals): {exc}")
                 continue
 
             all_records.extend(rows)
@@ -253,8 +285,19 @@ def _collect_journal_records_parallel(
     return all_records
 
 
-def _collect_single_journal_records_with_worker(
-    journal_url: str,
+def _split_journal_urls_for_workers(journal_urls: Sequence[str], workers: int) -> List[List[str]]:
+    if not journal_urls:
+        return []
+
+    worker_count = max(1, min(int(workers), len(journal_urls)))
+    buckets: List[List[str]] = [[] for _ in range(worker_count)]
+    for idx, url in enumerate(journal_urls):
+        buckets[idx % worker_count].append(url)
+    return [bucket for bucket in buckets if bucket]
+
+
+def _collect_journal_batch_with_worker(
+    journal_urls: Sequence[str],
     config: AppConfig,
     selector_cfg: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
@@ -265,21 +308,47 @@ def _collect_single_journal_records_with_worker(
             "Playwright is not installed. Run: pip install -r requirements.txt && playwright install chromium"
         ) from exc
 
+    all_records: List[Dict[str, Any]] = []
+    empty_debug_written = 0
+
     with sync_playwright() as pw:
         browser = pw.chromium.launch(**_build_launch_kwargs(config))
         context = browser.new_context(**_build_context_kwargs(config))
         page = context.new_page()
+        try:
+            for journal_url in journal_urls:
+                try:
+                    rows = _collect_single_journal_records(
+                        page=page,
+                        journal_url=journal_url,
+                        base_url=config.base_url,
+                        selector_cfg=selector_cfg,
+                        config=config,
+                    )
+                except CollectorError:
+                    raise
+                except Exception as exc:
+                    print(f"[collector] Skip journal {journal_url}: {exc}")
+                    continue
 
-        rows = _collect_single_journal_records(
-            page=page,
-            journal_url=journal_url,
-            base_url=config.base_url,
-            selector_cfg=selector_cfg,
-            config=config,
-        )
-        context.close()
-        browser.close()
-    return rows
+                if not rows:
+                    if empty_debug_written < 3:
+                        journal_id = _extract_journal_id(journal_url)
+                        _write_text_artifact(
+                            logs_dir=config.logs_dir,
+                            stem=f"journal-empty-{journal_id}",
+                            content=journal_url,
+                            suffix="url.txt",
+                        )
+                        empty_debug_written += 1
+                    continue
+
+                all_records.extend(rows)
+        finally:
+            context.close()
+            browser.close()
+
+    return all_records
 
 
 def _collect_journal_links(
@@ -289,6 +358,7 @@ def _collect_journal_links(
     list_cfg: Dict[str, Any],
     config: AppConfig,
     selector_cfg: Dict[str, Any],
+    include_class_tokens: Sequence[str],
 ) -> List[str]:
     link_selector = list_cfg.get("link_selector", 'a[href*="/journal/"]')
     next_selector = list_cfg.get("next_page_selector", ".pagination a[rel='next'], .pagination li.next a")
@@ -318,6 +388,7 @@ def _collect_journal_links(
             link_selector=link_selector,
             base_url=base_url,
             excluded_subject_titles=excluded_subject_titles,
+            include_class_tokens=include_class_tokens,
         )
         if not links:
             discovered = _discover_journal_links_by_click(
@@ -326,6 +397,7 @@ def _collect_journal_links(
                 list_url=list_url,
                 config=config,
                 selector_cfg=selector_cfg,
+                include_class_tokens=include_class_tokens,
             )
             click_discovery_urls.extend(discovered)
 
@@ -375,13 +447,71 @@ def _is_excluded_subject_text(subject_text: Any, excluded_subject_titles: Sequen
     return any(excluded in token for excluded in excluded_subject_titles)
 
 
+def _resolve_include_class_tokens(list_cfg: Dict[str, Any], include_classes: Optional[Sequence[str]]) -> List[str]:
+    configured = list_cfg.get("include_classes", [])
+    values: List[str] = []
+    if isinstance(configured, str):
+        values.append(configured)
+    elif isinstance(configured, Sequence):
+        values.extend(str(item) for item in configured)
+
+    values.extend(str(item) for item in (include_classes or []))
+
+    normalized: List[str] = []
+    seen: set = set()
+    for item in values:
+        token = _normalize_class_filter_token(item)
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        normalized.append(token)
+    return normalized
+
+
+def _normalize_class_filter_token(text: Any) -> str:
+    token = normalize_class_name(str(text or ""))
+    token = re.sub(r"\s*[-–]\s*", "-", token)
+    token = " ".join(token.split()).strip()
+    return token.casefold()
+
+
+def _is_included_class_text(subject_text: Any, include_class_tokens: Sequence[str]) -> bool:
+    if not include_class_tokens:
+        return True
+
+    class_name = _extract_class_name_hint(subject_text)
+    if not class_name:
+        return True
+    class_token = _normalize_class_filter_token(class_name)
+    if not class_token:
+        return True
+    return class_token in include_class_tokens
+
+
+def _filter_records_by_include_class_tokens(
+    records: Sequence[Dict[str, Any]],
+    include_class_tokens: Sequence[str],
+) -> List[Dict[str, Any]]:
+    if not include_class_tokens:
+        return list(records)
+
+    filtered: List[Dict[str, Any]] = []
+    for row in records:
+        class_token = _normalize_class_filter_token(row.get("class_name", ""))
+        if class_token in include_class_tokens:
+            filtered.append(row)
+    return filtered
+
+
 def _extract_links_from_page(
     page: Any,
     link_selector: str,
     base_url: str,
     excluded_subject_titles: Sequence[str],
+    include_class_tokens: Sequence[str],
 ) -> List[str]:
     raw_values: List[str] = []
+    included_raw_values: List[str] = []
     excluded_raw_values: List[str] = []
     locator = page.locator(link_selector)
     count = locator.count()
@@ -399,23 +529,31 @@ def _extract_links_from_page(
         if _is_excluded_subject_text(subject_text, excluded_subject_titles):
             excluded_raw_values.extend(values)
             continue
+        if include_class_tokens and not _is_included_class_text(subject_text, include_class_tokens):
+            excluded_raw_values.extend(values)
+            continue
+        included_raw_values.extend(values)
         raw_values.extend(values)
 
-    try:
-        attr_values = page.eval_on_selector_all(
-            "[href], [data-href], [data-url], [onclick]",
-            "els => els.flatMap(el => [el.getAttribute('href'), el.getAttribute('data-href'), el.getAttribute('data-url'), el.getAttribute('onclick')]).filter(Boolean)",
-        )
-        raw_values.extend(str(value) for value in attr_values)
-    except Exception:
-        pass
+    if include_class_tokens:
+        links = _extract_candidate_journal_hrefs(included_raw_values)
+    else:
+        try:
+            attr_values = page.eval_on_selector_all(
+                "[href], [data-href], [data-url], [onclick]",
+                "els => els.flatMap(el => [el.getAttribute('href'), el.getAttribute('data-href'), el.getAttribute('data-url'), el.getAttribute('onclick')]).filter(Boolean)",
+            )
+            raw_values.extend(str(value) for value in attr_values)
+        except Exception:
+            pass
 
-    try:
-        raw_values.append(page.content())
-    except Exception:
-        pass
+        try:
+            raw_values.append(page.content())
+        except Exception:
+            pass
 
-    links = _extract_candidate_journal_hrefs(raw_values)
+        links = _extract_candidate_journal_hrefs(raw_values)
+
     if not excluded_raw_values:
         return links
 
@@ -427,18 +565,22 @@ def _extract_links_from_page(
 
 
 def _filter_excluded_journal_links(links: Sequence[str], excluded_links: Sequence[str], base_url: str) -> List[str]:
-    excluded_canonical = {
-        canonical
-        for canonical in (_canonicalize_journal_link(link, base_url=base_url) for link in excluded_links)
-        if canonical
+    excluded_keys = {
+        key
+        for key in (
+            _journal_url_dedupe_key(_canonicalize_journal_link(link, base_url=base_url))
+            for link in excluded_links
+        )
+        if key
     }
-    if not excluded_canonical:
+    if not excluded_keys:
         return list(links)
 
     filtered: List[str] = []
     for link in links:
         canonical = _canonicalize_journal_link(link, base_url=base_url)
-        if canonical and canonical in excluded_canonical:
+        key = _journal_url_dedupe_key(canonical)
+        if key and key in excluded_keys:
             continue
         filtered.append(link)
     return filtered
@@ -463,6 +605,7 @@ def _discover_journal_links_by_click(
     list_url: str,
     config: AppConfig,
     selector_cfg: Dict[str, Any],
+    include_class_tokens: Sequence[str],
 ) -> List[str]:
     chip_selector = list_cfg.get("chip_selector", "table tbody tr td:nth-child(2) *")
     wait_ms = int(list_cfg.get("click_wait_ms", 1500))
@@ -472,6 +615,8 @@ def _discover_journal_links_by_click(
     found: List[str] = []
 
     for label in labels:
+        if include_class_tokens and not _is_included_class_text(label, include_class_tokens):
+            continue
         try:
             page.goto(list_url, wait_until="domcontentloaded")
             page.wait_for_timeout(wait_ms)
@@ -1390,6 +1535,8 @@ def _extract_page_number(url: str) -> Optional[int]:
 def _extract_journal_id(journal_url: str) -> str:
     parsed = urlparse(journal_url)
     query = parse_qs(parsed.query)
+    if "journal" in query and query["journal"]:
+        return query["journal"][0]
     if "id" in query and query["id"]:
         return query["id"][0]
 
@@ -1519,17 +1666,43 @@ def _write_journal_records_csv(run_dir: Path, records: Iterable[Dict[str, Any]])
 
 def _collect_paginated_links(pages: Iterable[Dict[str, Any]], base_url: str) -> List[str]:
     links: List[str] = []
-    seen: set = set()
+    seen_keys: set = set()
 
     for page in pages:
         for raw_link in page.get("links", []):
             url = _normalize_collectable_journal_url(raw_link=raw_link, base_url=base_url)
-            if not url or url in seen:
+            key = _journal_url_dedupe_key(url)
+            if not url or not key or key in seen_keys:
                 continue
-            seen.add(url)
+            seen_keys.add(key)
             links.append(url)
 
     return links
+
+
+def _journal_url_dedupe_key(url: Optional[str]) -> Optional[str]:
+    token = str(url or "").strip()
+    if not token:
+        return None
+
+    parsed = urlparse(token)
+    path = parsed.path.lower().rstrip("/")
+    query = parse_qs(parsed.query)
+
+    journal_id = None
+    if path in {"/journal", "/journal/index"}:
+        if query.get("journal"):
+            journal_id = query["journal"][0]
+        elif query.get("id"):
+            journal_id = query["id"][0]
+    elif re.fullmatch(r"/journal/\d+", path):
+        journal_id = path.split("/")[-1]
+
+    subgroup = query.get("subgroup", [""])[0]
+    if journal_id:
+        return f"journal:{journal_id}|subgroup:{subgroup}"
+
+    return _canonical_url(token)
 
 
 def _normalize_collectable_journal_url(raw_link: Any, base_url: str) -> Optional[str]:

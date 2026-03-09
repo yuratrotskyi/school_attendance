@@ -28,6 +28,7 @@ def run_daily(
     dry_run: bool = False,
     skip_collect: bool = False,
     raw_files: Optional[Iterable[Path]] = None,
+    include_classes: Optional[Iterable[str]] = None,
 ) -> Dict[str, object]:
     """Run daily attendance pipeline and return artifact metadata."""
 
@@ -44,7 +45,7 @@ def run_daily(
     files: List[Path] = [Path(p) for p in raw_files] if raw_files else []
 
     if not skip_collect and not dry_run:
-        collected = collect_raw_exports(config, run_date)
+        collected = collect_raw_exports(config, run_date, include_classes=list(include_classes or []))
         files.extend(collected)
 
     if not files:

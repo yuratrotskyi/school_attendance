@@ -218,16 +218,23 @@ def _build_student_absence_rows(
                 "semester_absent_lessons": 0,
                 "ten_plus_periods_count": 0,
                 "last_ten_plus_period": "-",
+                "_week_days": set(),
+                "_month_days": set(),
+                "_semester_days": set(),
             }
 
         if _in_period(row.lesson_date, bounds["week"]):
-            grouped[key]["week_absent_lessons"] = int(grouped[key]["week_absent_lessons"]) + 1
+            grouped[key]["_week_days"].add(row.lesson_date)  # type: ignore[attr-defined]
         if _in_period(row.lesson_date, bounds["month"]):
-            grouped[key]["month_absent_lessons"] = int(grouped[key]["month_absent_lessons"]) + 1
+            grouped[key]["_month_days"].add(row.lesson_date)  # type: ignore[attr-defined]
         if _in_period(row.lesson_date, bounds["semester"]):
-            grouped[key]["semester_absent_lessons"] = int(grouped[key]["semester_absent_lessons"]) + 1
+            grouped[key]["_semester_days"].add(row.lesson_date)  # type: ignore[attr-defined]
 
     rows = list(grouped.values())
+    for row in rows:
+        row["week_absent_lessons"] = len(row.pop("_week_days", set()))
+        row["month_absent_lessons"] = len(row.pop("_month_days", set()))
+        row["semester_absent_lessons"] = len(row.pop("_semester_days", set()))
     rows = [
         row
         for row in rows
@@ -237,7 +244,10 @@ def _build_student_absence_rows(
     ]
     for row in rows:
         student_id = str(row.get("student_id", ""))
-        ten_day = ten_day_summary.get(student_id, {})
+        student_name = str(row.get("student_name", ""))
+        class_name = str(row.get("class_name", ""))
+        identity_key = _student_identity_key(student_id=student_id, student_name=student_name, class_name=class_name)
+        ten_day = ten_day_summary.get(identity_key) or ten_day_summary.get(student_id, {})
         count = int(ten_day.get("ten_plus_periods_count", 0) or 0)
         start = str(ten_day.get("last_period_start", "") or "").strip()
         end = str(ten_day.get("last_period_end", "") or "").strip()
@@ -327,3 +337,7 @@ def _in_period(day: date, bounds: Optional[Tuple[date, date]]) -> bool:
         return False
     start, end = bounds
     return start <= day <= end
+
+
+def _student_identity_key(student_id: str, student_name: str, class_name: str) -> str:
+    return f"{student_id}::{student_name}::{class_name}"

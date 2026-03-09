@@ -261,6 +261,116 @@ class TestParserAndReporting(unittest.TestCase):
                 headers,
             )
 
+    def test_write_report_bundle_uses_composite_ten_day_key_for_duplicate_student_ids(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            records = [
+                AttendanceRecord(
+                    student_id="dup",
+                    student_name="A",
+                    class_name="8-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=1,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+                AttendanceRecord(
+                    student_id="dup",
+                    student_name="B",
+                    class_name="10-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=1,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+            ]
+            summary = {
+                "week": {"absent_lessons": 2, "period_start": "2026-02-27", "period_end": "2026-03-04"},
+                "month": {"absent_lessons": 2, "period_start": "2026-02-04", "period_end": "2026-03-04"},
+                "semester": {"absent_lessons": 2, "period_start": "2026-01-12", "period_end": "2026-03-04"},
+            }
+            ten_day_summary = {
+                "dup::A::8-А": {
+                    "ten_plus_periods_count": 1,
+                    "last_period_start": "2026-01-12",
+                    "last_period_end": "2026-01-21",
+                },
+                "dup::B::10-А": {
+                    "ten_plus_periods_count": 1,
+                    "last_period_start": "2026-02-01",
+                    "last_period_end": "2026-02-10",
+                },
+            }
+
+            write_report_bundle(
+                out_dir=out_dir,
+                run_date=date(2026, 3, 4),
+                summary=summary,
+                records=records,
+                incidents=[],
+                ten_day_summary=ten_day_summary,
+                ten_day_periods=[],
+            )
+
+            with (out_dir / "student-absence-summary.csv").open(encoding="utf-8") as handle:
+                grouped_rows = list(csv.DictReader(handle))
+
+            by_name = {row["Учень"]: row for row in grouped_rows}
+            self.assertEqual("2026-01-12 - 2026-01-21", by_name["A"]["Останній період 10+ (від-до)"])
+            self.assertEqual("2026-02-01 - 2026-02-10", by_name["B"]["Останній період 10+ (від-до)"])
+
+    def test_write_report_bundle_counts_absence_days_not_lessons_in_grouped_summary(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            records = [
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=1,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=2,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 2, 20),
+                    lesson_no=1,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+            ]
+            summary = {
+                "week": {"absent_lessons": 2, "period_start": "2026-02-27", "period_end": "2026-03-04"},
+                "month": {"absent_lessons": 3, "period_start": "2026-02-04", "period_end": "2026-03-04"},
+                "semester": {"absent_lessons": 3, "period_start": "2026-01-12", "period_end": "2026-03-04"},
+            }
+
+            write_report_bundle(
+                out_dir=out_dir,
+                run_date=date(2026, 3, 4),
+                summary=summary,
+                records=records,
+                incidents=[],
+            )
+
+            with (out_dir / "student-absence-summary.csv").open(encoding="utf-8") as handle:
+                grouped_rows = list(csv.DictReader(handle))
+            self.assertEqual("1", grouped_rows[0]["Н (7 днів)"])
+            self.assertEqual("2", grouped_rows[0]["Н (30 днів)"])
+            self.assertEqual("2", grouped_rows[0]["Н"])
+
 
 if __name__ == "__main__":
     unittest.main()
