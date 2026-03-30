@@ -266,18 +266,93 @@ def _collect_attendance_overview_records(
 
     raw_rows: List[Dict[str, Any]] = []
     for option in class_options:
-        class_url = _build_attendance_overview_class_url(overview_url=overview_url, class_id=option["class_id"])
-        page.goto(class_url, wait_until="domcontentloaded")
-        page.wait_for_timeout(wait_ms)
-        _ensure_not_cloudflare_blocked(
-            page=page,
-            config=config,
-            selector_cfg=selector_cfg,
-            stage="attendance-overview-class",
+        raw_rows.extend(
+            _collect_attendance_overview_class_rows(
+                page=page,
+                config=config,
+                selector_cfg=selector_cfg,
+                class_url=_build_attendance_overview_class_url(overview_url=overview_url, class_id=option["class_id"]),
+                class_name=option["class_name"],
+                wait_ms=wait_ms,
+            )
         )
-        raw_rows.extend(_extract_rows_from_dom_grid(page=page, class_name_hint=option["class_name"]))
 
     return _normalize_attendance_overview_rows(raw_rows, source_id="attendance-overview")
+
+
+def _collect_attendance_overview_class_rows(
+    page: Any,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+    class_url: str,
+    class_name: str,
+    wait_ms: int,
+) -> List[Dict[str, Any]]:
+    _open_attendance_overview_page(
+        page=page,
+        url=class_url,
+        wait_ms=wait_ms,
+        config=config,
+        selector_cfg=selector_cfg,
+        stage="attendance-overview-class",
+    )
+
+    first_href = _extract_first_href(page=page, current_url=page.url, base_url=config.base_url)
+    if first_href and not _urls_equal(first_href, page.url):
+        _open_attendance_overview_page(
+            page=page,
+            url=first_href,
+            wait_ms=wait_ms,
+            config=config,
+            selector_cfg=selector_cfg,
+            stage="attendance-overview-class-first-page",
+        )
+
+    rows: List[Dict[str, Any]] = []
+    seen_pages: set = set()
+    while True:
+        current_url = _canonical_url(page.url)
+        if current_url in seen_pages:
+            break
+        seen_pages.add(current_url)
+        rows.extend(_extract_rows_from_dom_grid(page=page, class_name_hint=class_name))
+
+        next_href = _extract_next_href(
+            page=page,
+            next_selector=".pagination a",
+            current_url=page.url,
+            base_url=config.base_url,
+        )
+        if not next_href or _canonical_url(next_href) in seen_pages:
+            break
+        _open_attendance_overview_page(
+            page=page,
+            url=next_href,
+            wait_ms=wait_ms,
+            config=config,
+            selector_cfg=selector_cfg,
+            stage="attendance-overview-class-next-page",
+        )
+
+    return rows
+
+
+def _open_attendance_overview_page(
+    page: Any,
+    url: str,
+    wait_ms: int,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+    stage: str,
+) -> None:
+    page.goto(url, wait_until="domcontentloaded")
+    page.wait_for_timeout(wait_ms)
+    _ensure_not_cloudflare_blocked(
+        page=page,
+        config=config,
+        selector_cfg=selector_cfg,
+        stage=stage,
+    )
 
 
 def _extract_attendance_overview_class_options(page: Any, class_select_selector: str) -> List[Dict[str, str]]:
@@ -1771,10 +1846,10 @@ def _map_mark_to_status(mark: Any) -> Optional[str]:
 
 
 def _map_attendance_overview_mark_to_status(mark: Any) -> Optional[str]:
-    token = str(mark or "").strip().casefold()
-    if not token:
-        return "PRESENT"
-    return "ABSENT"
+    token = str(mark or "").strip().casefold().replace(".", "")
+    if token == "н":
+        return "ABSENT"
+    return "PRESENT"
 
 
 def _normalize_date(value: Any) -> Optional[str]:

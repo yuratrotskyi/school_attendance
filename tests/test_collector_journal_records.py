@@ -1,9 +1,15 @@
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlencode, urlparse
 
+from school_attendance.analytics import build_ten_day_absence_periods
+from school_attendance.config import AppConfig
 from school_attendance.collector import (
     _build_grid_column_meta,
+    _collect_attendance_overview_records,
     _collect_paginated_links,
     _extract_class_name_hint,
     _extract_dates_from_topics,
@@ -24,6 +30,73 @@ from school_attendance.collector import (
     _resolve_date_from_day_and_month,
     _write_journal_records_csv,
 )
+from school_attendance.models import AttendanceRecord
+
+
+class _FakeAttendanceOverviewPage:
+    def __init__(self, overview_url, class_pages):
+        self._overview_url = overview_url
+        self._class_pages = class_pages
+        self.url = overview_url
+        self._current_class_id = None
+        self._current_page = None
+
+    def goto(self, url, wait_until="domcontentloaded"):
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        class_id = (query.get("class_id") or [None])[0]
+        if not class_id:
+            self.url = url
+            self._current_class_id = None
+            self._current_page = None
+            return
+
+        landing_page = int(self._class_pages[class_id].get("landing_page", 1))
+        page_no = int((query.get("page") or [landing_page])[0])
+        self._current_class_id = class_id
+        self._current_page = page_no
+        self.url = parsed._replace(query=urlencode([("class_id", class_id), ("page", str(page_no))])).geturl()
+
+    def wait_for_timeout(self, _wait_ms):
+        return None
+
+    def locator(self, _selector):
+        return _EmptyLocator()
+
+    def eval_on_selector_all(self, selector, _script):
+        if selector.endswith(" option"):
+            return [
+                {
+                    "value": class_id,
+                    "label": page_cfg["class_name"],
+                    "disabled": False,
+                    "hidden": False,
+                }
+                for class_id, page_cfg in self._class_pages.items()
+            ]
+        if ".pagination a" in selector:
+            if not self._current_class_id or self._current_page is None:
+                return []
+            return self._class_pages[self._current_class_id]["pages"][self._current_page]["hrefs"]
+        raise AssertionError(f"Unexpected selector: {selector}")
+
+    def evaluate(self, _script):
+        if not self._current_class_id or self._current_page is None:
+            return None
+        page_cfg = self._class_pages[self._current_class_id]["pages"][self._current_page]
+        return {
+            "day_headers": page_cfg["day_headers"],
+            "month_headers": [{"text": token, "span": 1} for token in page_cfg["day_headers"]],
+            "rows": page_cfg["rows"],
+            "name_col_idx": 1,
+            "topic_dates": [],
+            "page_text": "Семестр: 2025-2026 [2], 07.01.2026 - 05.06.2026 (поточний)",
+        }
+
+
+class _EmptyLocator:
+    def count(self):
+        return 0
 
 
 class TestCollectorJournalRecords(unittest.TestCase):
@@ -87,7 +160,7 @@ class TestCollectorJournalRecords(unittest.TestCase):
         self.assertEqual(1, len(got))
         self.assertEqual("ABSENT", got[0]["status"])
 
-    def test_normalize_attendance_overview_rows_maps_all_absence_marks_to_absent(self):
+    def test_normalize_attendance_overview_rows_counts_only_n_as_absent(self):
         rows = [
             {
                 "student_id": "1",
@@ -128,8 +201,118 @@ class TestCollectorJournalRecords(unittest.TestCase):
         self.assertEqual(4, len(got))
         self.assertEqual("PRESENT", got[0]["status"])
         self.assertEqual("ABSENT", got[1]["status"])
-        self.assertEqual("ABSENT", got[2]["status"])
-        self.assertEqual("ABSENT", got[3]["status"])
+        self.assertEqual("PRESENT", got[2]["status"])
+        self.assertEqual("PRESENT", got[3]["status"])
+
+    @patch("school_attendance.collector._ensure_not_cloudflare_blocked")
+    def test_collect_attendance_overview_records_follows_all_pages_and_keeps_ten_day_n_period(self, _mock_cf):
+        overview_url = "https://nz.ua/journal/absent-students"
+        fake_page = _FakeAttendanceOverviewPage(
+            overview_url=overview_url,
+            class_pages={
+                "42": {
+                    "class_name": "6-Б",
+                    "landing_page": 3,
+                    "pages": {
+                        1: {
+                            "day_headers": ["#", "ПІБ учня", "2 Бер.", "3", "4"],
+                            "rows": [["1", "Коломієць Марко", "Н", "Н", "Н"]],
+                            "hrefs": [
+                                "/journal/absent-students?class_id=42&page=1",
+                                "/journal/absent-students?class_id=42&page=2",
+                            ],
+                        },
+                        2: {
+                            "day_headers": ["#", "ПІБ учня", "5 Бер.", "6", "9"],
+                            "rows": [["1", "Коломієць Марко", "Н", "Н", "Н"]],
+                            "hrefs": [
+                                "/journal/absent-students?class_id=42&page=1",
+                                "/journal/absent-students?class_id=42&page=2",
+                                "/journal/absent-students?class_id=42&page=3",
+                            ],
+                        },
+                        3: {
+                            "day_headers": ["#", "ПІБ учня", "10 Бер.", "11", "12"],
+                            "rows": [["1", "Коломієць Марко", "Н", "Н", "Н"]],
+                            "hrefs": [
+                                "/journal/absent-students?class_id=42&page=1",
+                                "/journal/absent-students?class_id=42&page=2",
+                                "/journal/absent-students?class_id=42&page=3",
+                                "/journal/absent-students?class_id=42&page=4",
+                            ],
+                        },
+                        4: {
+                            "day_headers": ["#", "ПІБ учня", "13 Бер.", "16", "17"],
+                            "rows": [["1", "Коломієць Марко", "Н", "", ""]],
+                            "hrefs": [
+                                "/journal/absent-students?class_id=42&page=3",
+                                "/journal/absent-students?class_id=42&page=4",
+                            ],
+                        },
+                    },
+                }
+            },
+        )
+        config = AppConfig(
+            nz_login=None,
+            nz_password=None,
+            semester_start=date(2026, 1, 12),
+            risk_threshold=0.1,
+            excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+            data_dir=Path("data"),
+            out_dir=Path("out"),
+            logs_dir=Path("logs"),
+            selectors_path=None,
+            session_state_path=Path("config/nz_session_state.json"),
+            base_url="https://nz.ua",
+        )
+        selector_cfg = {
+            "attendance_overview": {
+                "url": overview_url,
+                "class_select_selector": "#absent-students-form select[name='class_id']",
+                "wait_ms": 0,
+            }
+        }
+
+        rows = _collect_attendance_overview_records(
+            page=fake_page,
+            config=config,
+            selector_cfg=selector_cfg,
+            include_classes=["6-Б"],
+        )
+        records = [
+            AttendanceRecord(
+                student_id=row["student_id"],
+                student_name=row["student_name"],
+                class_name=row["class_name"],
+                lesson_date=date.fromisoformat(row["date"]),
+                lesson_no=int(row["lesson_no"]),
+                status=row["status"],
+                reason_code=row["reason_code"],
+            )
+            for row in rows
+        ]
+
+        _summary, periods = build_ten_day_absence_periods(
+            records=records,
+            semester_start=date(2026, 1, 12),
+            run_date=date(2026, 3, 30),
+            min_learning_days=10,
+        )
+
+        self.assertEqual(
+            [
+                {
+                    "student_id": "name-коломієцьмарко",
+                    "student_name": "Коломієць Марко",
+                    "class_name": "6-Б",
+                    "period_start": "2026-03-02",
+                    "period_end": "2026-03-13",
+                    "learning_days_absent": 10,
+                }
+            ],
+            periods,
+        )
 
     def test_collect_paginated_links_merges_pages_and_deduplicates(self):
         pages = [

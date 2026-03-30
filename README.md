@@ -57,6 +57,21 @@ PYTHONPATH=src python3 -m school_attendance.cli run-daily \
 ```
 Якщо файл сесії валідний, додаток використає його автоматично і не робитиме повторний логін по паролю.
 
+### 3) Окремий звіт по 10+ днях підряд з вкладки `Журнали -> Відвідуваність`
+```bash
+PYTHONPATH=src python3 -m school_attendance.cli run-attendance-10plus \
+  --run-date 2026-03-04
+```
+Команда створює тільки файли:
+- `out/<date>/періоди-відсутності-10-днів-відвідуваність.csv`
+- `out/<date>/періоди-відсутності-10-днів-відвідуваність.xlsx`
+
+### 4) Дві основні команди для термінала
+```bash
+PYTHONPATH=src python3 -m school_attendance.cli run-daily --run-date 2026-03-04
+PYTHONPATH=src python3 -m school_attendance.cli run-attendance-10plus --run-date 2026-03-04
+```
+
 Якщо з'являється Cloudflare:
 1. Запустіть `bootstrap-session` і пройдіть "Verify you are human" у відкритому браузері.
 2. Після збереження сесії повторіть `run-daily`.
