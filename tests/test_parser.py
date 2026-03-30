@@ -2,12 +2,42 @@ import csv
 import json
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date
 from pathlib import Path
 
 from school_attendance.models import AttendanceRecord
 from school_attendance.parser import parse_attendance_csv
 from school_attendance.reporting import write_report_bundle
+
+
+def _read_xlsx_rows(path: Path):
+    namespace = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(path) as archive:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+            for item in shared_root.findall("a:si", namespace):
+                shared_strings.append("".join(text_node.text or "" for text_node in item.findall(".//a:t", namespace)))
+
+        sheet_root = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+        rows = []
+        for row in sheet_root.findall(".//a:sheetData/a:row", namespace):
+            current = []
+            for cell in row.findall("a:c", namespace):
+                cell_type = cell.attrib.get("t", "")
+                if cell_type == "inlineStr":
+                    value = "".join(text_node.text or "" for text_node in cell.findall(".//a:t", namespace))
+                else:
+                    raw_value = cell.findtext("a:v", default="", namespaces=namespace)
+                    if cell_type == "s" and raw_value:
+                        value = shared_strings[int(raw_value)]
+                    else:
+                        value = raw_value
+                current.append(value)
+            rows.append(current)
+        return rows
 
 
 class TestParserAndReporting(unittest.TestCase):
@@ -148,6 +178,55 @@ class TestParserAndReporting(unittest.TestCase):
                 report_text.index("| Петренко Петро | 7-А | 1 | 1 | 1 |"),
             )
 
+    def test_write_report_bundle_creates_xlsx_output_files(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            records = [
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=2,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                ),
+            ]
+            summary = {
+                "week": {"absent_lessons": 1, "period_start": "2026-02-27", "period_end": "2026-03-04"},
+                "month": {"absent_lessons": 1, "period_start": "2026-02-04", "period_end": "2026-03-04"},
+                "semester": {"absent_lessons": 1, "period_start": "2026-01-12", "period_end": "2026-03-04"},
+            }
+
+            paths = write_report_bundle(
+                out_dir=out_dir,
+                run_date=date(2026, 3, 4),
+                summary=summary,
+                records=records,
+                incidents=[],
+            )
+
+            detail_xlsx = out_dir / "detail.xlsx"
+            student_summary_xlsx = out_dir / "student-absence-summary.xlsx"
+            class_daily_xlsx = out_dir / "відсутність-сьогодні-вчора.xlsx"
+
+            self.assertEqual(str(detail_xlsx), paths["detail_xlsx"])
+            self.assertEqual(str(student_summary_xlsx), paths["student_absence_summary_xlsx"])
+            self.assertEqual(str(class_daily_xlsx), paths["class_absence_today_yesterday_xlsx"])
+            self.assertTrue(detail_xlsx.exists())
+            self.assertTrue(student_summary_xlsx.exists())
+            self.assertTrue(class_daily_xlsx.exists())
+
+            detail_rows = _read_xlsx_rows(detail_xlsx)
+            self.assertEqual(
+                ["student_id", "student_name", "class", "date", "lesson_no", "status", "reason_code"],
+                detail_rows[0],
+            )
+            self.assertEqual(
+                ["123", "Іваненко Іван", "7-А", "2026-03-04", "2", "ABSENT", "UNEXCUSED"],
+                detail_rows[1],
+            )
+
     def test_write_report_bundle_contains_ten_plus_columns_and_optional_periods_csv(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             out_dir = Path(tmp_dir) / "out"
@@ -215,6 +294,59 @@ class TestParserAndReporting(unittest.TestCase):
             self.assertIn("ten_day_absence_periods_csv", paths)
             periods_path = out_dir / "ten-day-absence-periods.csv"
             self.assertTrue(periods_path.exists())
+
+    def test_write_report_bundle_writes_localized_ten_day_periods_xlsx(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            records = [
+                AttendanceRecord(
+                    student_id="123",
+                    student_name="Іваненко Іван",
+                    class_name="7-А",
+                    lesson_date=date(2026, 3, 4),
+                    lesson_no=2,
+                    status="ABSENT",
+                    reason_code="UNEXCUSED",
+                )
+            ]
+            summary = {
+                "week": {"absent_lessons": 1, "period_start": "2026-02-27", "period_end": "2026-03-04"},
+                "month": {"absent_lessons": 1, "period_start": "2026-02-04", "period_end": "2026-03-04"},
+                "semester": {"absent_lessons": 1, "period_start": "2026-01-12", "period_end": "2026-03-04"},
+            }
+            ten_day_periods = [
+                {
+                    "student_id": "123",
+                    "student_name": "Іваненко Іван",
+                    "class_name": "7-А",
+                    "period_start": "2026-02-01",
+                    "period_end": "2026-02-11",
+                    "learning_days_absent": 11,
+                }
+            ]
+
+            paths = write_report_bundle(
+                out_dir=out_dir,
+                run_date=date(2026, 3, 4),
+                summary=summary,
+                records=records,
+                incidents=[],
+                ten_day_periods=ten_day_periods,
+            )
+
+            localized_xlsx = out_dir / "періоди-відсутності-10-днів.xlsx"
+            self.assertEqual(str(localized_xlsx), paths["ten_day_absence_periods_xlsx"])
+            self.assertTrue(localized_xlsx.exists())
+
+            rows = _read_xlsx_rows(localized_xlsx)
+            self.assertEqual(
+                ["ID учня", "Учень", "Клас", "Період від", "Період до", "К-сть навчальних днів"],
+                rows[0],
+            )
+            self.assertEqual(
+                ["123", "Іваненко Іван", "7-А", "2026-02-01", "2026-02-11", "11"],
+                rows[1],
+            )
 
     def test_student_absence_summary_headers_are_ukrainian(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

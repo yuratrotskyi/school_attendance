@@ -47,10 +47,16 @@ class TestPipelineDryRun(unittest.TestCase):
 
             summary_path = Path(result["paths"]["summary_json"])
             detail_path = Path(result["paths"]["detail_csv"])
+            detail_xlsx_path = Path(result["paths"]["detail_xlsx"])
+            student_summary_xlsx_path = Path(result["paths"]["student_absence_summary_xlsx"])
+            class_daily_xlsx_path = Path(result["paths"]["class_absence_today_yesterday_xlsx"])
             report_path = Path(result["paths"]["report_md"])
 
             self.assertTrue(summary_path.exists())
             self.assertTrue(detail_path.exists())
+            self.assertTrue(detail_xlsx_path.exists())
+            self.assertTrue(student_summary_xlsx_path.exists())
+            self.assertTrue(class_daily_xlsx_path.exists())
             self.assertTrue(report_path.exists())
             self.assertEqual(1, result["incident_count"])
 
@@ -142,8 +148,11 @@ class TestPipelineDryRun(unittest.TestCase):
             )
 
             self.assertIn("ten_day_absence_periods_csv", result["paths"])
+            self.assertIn("ten_day_absence_periods_xlsx", result["paths"])
             periods_path = Path(result["paths"]["ten_day_absence_periods_csv"])
+            periods_xlsx_path = Path(result["paths"]["ten_day_absence_periods_xlsx"])
             self.assertTrue(periods_path.exists())
+            self.assertTrue(periods_xlsx_path.exists())
 
     def test_run_daily_skips_ten_day_periods_csv_when_absent(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -177,6 +186,7 @@ class TestPipelineDryRun(unittest.TestCase):
             )
 
             self.assertNotIn("ten_day_absence_periods_csv", result["paths"])
+            self.assertNotIn("ten_day_absence_periods_xlsx", result["paths"])
 
     def test_run_daily_writes_ukrainian_class_daily_absence_csv(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
