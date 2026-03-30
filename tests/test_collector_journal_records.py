@@ -16,6 +16,7 @@ from school_attendance.collector import (
     _is_excluded_subject_text,
     _looks_like_class_chip_label,
     _normalize_journal_rows,
+    _normalize_attendance_overview_rows,
     _pick_first_pagination_href,
     _pick_next_pagination_href,
     _resolve_include_class_tokens,
@@ -85,6 +86,50 @@ class TestCollectorJournalRecords(unittest.TestCase):
 
         self.assertEqual(1, len(got))
         self.assertEqual("ABSENT", got[0]["status"])
+
+    def test_normalize_attendance_overview_rows_maps_all_absence_marks_to_absent(self):
+        rows = [
+            {
+                "student_id": "1",
+                "student_name": "Іваненко Іван",
+                "class_name": "7-А",
+                "date": "2026-03-04",
+                "lesson_no": 1,
+                "mark": "",
+            },
+            {
+                "student_id": "1",
+                "student_name": "Іваненко Іван",
+                "class_name": "7-А",
+                "date": "2026-03-05",
+                "lesson_no": 2,
+                "mark": "Н",
+            },
+            {
+                "student_id": "1",
+                "student_name": "Іваненко Іван",
+                "class_name": "7-А",
+                "date": "2026-03-06",
+                "lesson_no": 3,
+                "mark": "хв",
+            },
+            {
+                "student_id": "1",
+                "student_name": "Іваненко Іван",
+                "class_name": "7-А",
+                "date": "2026-03-09",
+                "lesson_no": 4,
+                "mark": "п/п",
+            },
+        ]
+
+        got = _normalize_attendance_overview_rows(rows, source_id="attendance-overview")
+
+        self.assertEqual(4, len(got))
+        self.assertEqual("PRESENT", got[0]["status"])
+        self.assertEqual("ABSENT", got[1]["status"])
+        self.assertEqual("ABSENT", got[2]["status"])
+        self.assertEqual("ABSENT", got[3]["status"])
 
     def test_collect_paginated_links_merges_pages_and_deduplicates(self):
         pages = [
@@ -308,9 +353,11 @@ class TestCollectorJournalRecords(unittest.TestCase):
     def test_extract_class_name_hint_from_title_and_header_text(self):
         from_title = _extract_class_name_hint("Журнал 6-А (І група підгрупа) | Нові знання")
         from_header = _extract_class_name_hint("Журнал оцінок для 5-А (I група підгрупа) [Інформатика]")
+        from_attendance = _extract_class_name_hint("Відвідуваність для 10-А")
 
         self.assertEqual("6-А", from_title)
         self.assertEqual("5-А", from_header)
+        self.assertEqual("10-А", from_attendance)
 
     def test_normalize_journal_rows_normalizes_class_name(self):
         rows = [

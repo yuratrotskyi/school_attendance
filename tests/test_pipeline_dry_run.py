@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from school_attendance.config import AppConfig
-from school_attendance.pipeline import run_daily
+from school_attendance.pipeline import run_attendance_10plus, run_daily
 
 
 class TestPipelineDryRun(unittest.TestCase):
@@ -62,6 +62,141 @@ class TestPipelineDryRun(unittest.TestCase):
 
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             self.assertEqual(2, summary["week"]["absent_lessons"])
+
+    def test_run_attendance_10plus_dry_run_writes_only_attendance_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance.csv"
+            lines = ["student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident"]
+            for day in range(1, 11):
+                lines.append(f"123,Іваненко Іван,7-А,2026-02-{day:02d},1,ABSENT,UNEXCUSED,false")
+            raw_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            result = run_attendance_10plus(
+                config=config,
+                run_date=date(2026, 3, 4),
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[raw_file],
+            )
+
+            self.assertIn("attendance_10plus_csv", result["paths"])
+            self.assertIn("attendance_10plus_xlsx", result["paths"])
+            self.assertTrue(Path(result["paths"]["attendance_10plus_csv"]).exists())
+            self.assertTrue(Path(result["paths"]["attendance_10plus_xlsx"]).exists())
+            self.assertNotIn("report_md", result["paths"])
+
+    @patch("school_attendance.collector.collect_attendance_overview_exports")
+    def test_run_attendance_10plus_passes_include_classes_to_overview_collection(self, mock_collect_attendance_overview_exports):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            raw_file = base / "attendance-overview.csv"
+            raw_file.write_text(
+                "student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident\n"
+                "123,Іваненко Іван,10-А,2026-03-04,1,ABSENT,UNEXCUSED,false\n",
+                encoding="utf-8",
+            )
+            mock_collect_attendance_overview_exports.return_value = [raw_file]
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            run_date = date(2026, 3, 5)
+            run_attendance_10plus(
+                config=config,
+                run_date=run_date,
+                dry_run=False,
+                skip_collect=False,
+                include_classes=["10-А", "8-Б"],
+            )
+
+            mock_collect_attendance_overview_exports.assert_called_once_with(
+                config,
+                run_date,
+                include_classes=["10-А", "8-Б"],
+            )
+
+    def test_run_attendance_10plus_preserves_existing_run_daily_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            base = Path(tmp_dir)
+            run_date = date(2026, 3, 5)
+            daily_raw = base / "attendance.csv"
+            overview_raw = base / "attendance-overview.csv"
+            daily_raw.write_text(
+                "student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident\n"
+                "123,Іваненко Іван,7-А,2026-03-05,1,PRESENT,,false\n"
+                "124,Петренко Петро,7-А,2026-03-05,1,ABSENT,UNEXCUSED,false\n",
+                encoding="utf-8",
+            )
+            overview_lines = ["student_id,student_name,class,date,lesson_no,status,reason_code,is_escape_incident"]
+            for day in range(1, 11):
+                overview_lines.append(f"555,Сидоренко Олена,10-А,2026-02-{day:02d},1,ABSENT,UNEXCUSED,false")
+            overview_raw.write_text("\n".join(overview_lines) + "\n", encoding="utf-8")
+
+            config = AppConfig(
+                nz_login=None,
+                nz_password=None,
+                semester_start=date(2026, 1, 12),
+                risk_threshold=0.1,
+                excused_codes={"EXCUSED_MEDICAL", "EXCUSED_FAMILY", "EXCUSED_ADMIN"},
+                data_dir=base / "data",
+                out_dir=base / "out",
+                logs_dir=base / "logs",
+                selectors_path=None,
+                session_state_path=base / "config" / "nz_session_state.json",
+                base_url="https://nz.ua",
+            )
+
+            daily_result = run_daily(
+                config=config,
+                run_date=run_date,
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[daily_raw],
+            )
+            report_path = Path(daily_result["paths"]["report_md"])
+            summary_path = Path(daily_result["paths"]["summary_json"])
+
+            self.assertTrue(report_path.exists())
+            self.assertTrue(summary_path.exists())
+
+            attendance_result = run_attendance_10plus(
+                config=config,
+                run_date=run_date,
+                dry_run=True,
+                skip_collect=True,
+                raw_files=[overview_raw],
+            )
+
+            self.assertTrue(report_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertTrue(Path(attendance_result["paths"]["attendance_10plus_csv"]).exists())
+            self.assertTrue(Path(attendance_result["paths"]["attendance_10plus_xlsx"]).exists())
 
     def test_run_daily_cleans_stale_artifacts_for_same_date(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -19,7 +19,7 @@ from .collector import collect_raw_exports
 from .config import AppConfig
 from .models import AttendanceRecord
 from .parser import parse_attendance_csv
-from .reporting import write_report_bundle
+from .reporting import write_attendance_10plus_report_bundle, write_report_bundle
 
 
 def run_daily(
@@ -102,6 +102,64 @@ def run_daily(
         "record_count": len(all_records),
         "incident_count": len(incidents),
         "risk_student_count": len(risk_students),
+        "paths": paths,
+    }
+
+
+def run_attendance_10plus(
+    config: AppConfig,
+    run_date: date,
+    dry_run: bool = False,
+    skip_collect: bool = False,
+    raw_files: Optional[Iterable[Path]] = None,
+    include_classes: Optional[Iterable[str]] = None,
+) -> Dict[str, object]:
+    """Run dedicated attendance-overview 10+ absence pipeline."""
+
+    run_raw_dir = config.data_dir / "raw-attendance-overview" / run_date.isoformat()
+    run_norm_dir = config.data_dir / "normalized-attendance-overview" / run_date.isoformat()
+    run_out_dir = config.out_dir / run_date.isoformat()
+
+    _reset_run_directory(run_raw_dir)
+    _reset_run_directory(run_norm_dir)
+    run_out_dir.mkdir(parents=True, exist_ok=True)
+
+    files: List[Path] = [Path(p) for p in raw_files] if raw_files else []
+
+    if not skip_collect and not dry_run:
+        from .collector import collect_attendance_overview_exports
+
+        collected = collect_attendance_overview_exports(
+            config,
+            run_date,
+            include_classes=list(include_classes or []),
+        )
+        files.extend(collected)
+
+    if not files:
+        raise ValueError("No raw files provided. Use --raw-file or run without --skip-collect.")
+
+    all_records: List[AttendanceRecord] = []
+    for file_path in files:
+        all_records.extend(parse_attendance_csv(file_path))
+
+    _write_normalized_csv(run_norm_dir / "attendance-overview.csv", all_records)
+
+    _ten_day_summary, ten_day_periods = build_ten_day_absence_periods(
+        records=all_records,
+        semester_start=config.semester_start,
+        run_date=run_date,
+        min_learning_days=10,
+    )
+    paths = write_attendance_10plus_report_bundle(
+        out_dir=run_out_dir,
+        rows=ten_day_periods,
+    )
+
+    return {
+        "run_date": run_date.isoformat(),
+        "record_count": len(all_records),
+        "period_count": len(ten_day_periods),
         "paths": paths,
     }
 

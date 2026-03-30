@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import load_config
-from .pipeline import run_daily
+from .pipeline import run_attendance_10plus, run_daily
 from .session_bootstrap import bootstrap_session
 
 
@@ -25,6 +25,27 @@ def build_parser() -> argparse.ArgumentParser:
     run_daily_parser.add_argument("--raw-file", action="append", default=[], help="Path to raw CSV export")
     run_daily_parser.add_argument("--class", action="append", default=[], dest="classes", help="Collect only specified class (repeatable)")
     run_daily_parser.add_argument("--env-file", default=".env", help="Path to .env file")
+
+    attendance_10plus_parser = subparsers.add_parser(
+        "run-attendance-10plus",
+        help="Run 10+ consecutive absence report from attendance overview",
+    )
+    attendance_10plus_parser.add_argument(
+        "--run-date",
+        default=datetime.now().date().isoformat(),
+        help="Run date (YYYY-MM-DD)",
+    )
+    attendance_10plus_parser.add_argument("--dry-run", action="store_true", help="Use only local files")
+    attendance_10plus_parser.add_argument("--skip-collect", action="store_true", help="Skip nz.ua data collection")
+    attendance_10plus_parser.add_argument("--raw-file", action="append", default=[], help="Path to raw CSV export")
+    attendance_10plus_parser.add_argument(
+        "--class",
+        action="append",
+        default=[],
+        dest="classes",
+        help="Collect only specified class (repeatable)",
+    )
+    attendance_10plus_parser.add_argument("--env-file", default=".env", help="Path to .env file")
 
     bootstrap_parser = subparsers.add_parser(
         "bootstrap-session",
@@ -49,6 +70,21 @@ def main(argv: Optional[list] = None) -> int:
         run_date = datetime.strptime(args.run_date, "%Y-%m-%d").date()
 
         result = run_daily(
+            config=config,
+            run_date=run_date,
+            dry_run=args.dry_run,
+            skip_collect=args.skip_collect,
+            raw_files=[Path(p) for p in args.raw_file],
+            include_classes=args.classes,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "run-attendance-10plus":
+        config = load_config(Path(args.env_file))
+        run_date = datetime.strptime(args.run_date, "%Y-%m-%d").date()
+
+        result = run_attendance_10plus(
             config=config,
             run_date=run_date,
             dry_run=args.dry_run,

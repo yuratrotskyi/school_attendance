@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from .classname import normalize_class_name
 from .config import AppConfig
@@ -106,6 +106,55 @@ def collect_raw_exports(config: AppConfig, run_date: date, include_classes: Opti
     return [raw_csv]
 
 
+def collect_attendance_overview_exports(
+    config: AppConfig,
+    run_date: date,
+    include_classes: Optional[Sequence[str]] = None,
+) -> List[Path]:
+    """Collect raw attendance-overview file from nz.ua absent-students page."""
+
+    if not config.selectors_path or not config.selectors_path.exists():
+        raise CollectorError("Selector config file is required (SELECTORS_PATH)")
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise CollectorError(
+            "Playwright is not installed. Run: pip install -r requirements.txt && playwright install chromium"
+        ) from exc
+
+    selector_cfg = json.loads(config.selectors_path.read_text(encoding="utf-8"))
+
+    run_dir = config.data_dir / "raw" / run_date.isoformat()
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(**_build_launch_kwargs(config))
+        context = browser.new_context(**_build_context_kwargs(config))
+        page = context.new_page()
+
+        _ensure_authenticated(page=page, config=config, selector_cfg=selector_cfg)
+        context.storage_state(path=str(config.session_state_path))
+
+        records = _collect_attendance_overview_records(
+            page=page,
+            config=config,
+            selector_cfg=selector_cfg,
+            include_classes=include_classes,
+        )
+        raw_csv = _write_journal_records_csv(
+            run_dir=run_dir,
+            records=records,
+            filename="attendance-overview.csv",
+        )
+        context.storage_state(path=str(config.session_state_path))
+
+        context.close()
+        browser.close()
+
+    return [raw_csv]
+
+
 def _ensure_authenticated(page: Any, config: AppConfig, selector_cfg: Dict[str, Any]) -> None:
     login_url = selector_cfg.get("login_url", f"{config.base_url}/")
     login_selector = selector_cfg.get("login_selector", 'input[name="login"]')
@@ -186,6 +235,88 @@ def _collect_journal_attendance_records(
             suffix="urls.txt",
         )
     return deduped
+
+
+def _collect_attendance_overview_records(
+    page: Any,
+    config: AppConfig,
+    selector_cfg: Dict[str, Any],
+    include_classes: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
+    overview_cfg = selector_cfg.get("attendance_overview", {})
+    overview_url = overview_cfg.get("url", f"{config.base_url}/journal/absent-students")
+    class_select_selector = overview_cfg.get("class_select_selector", "#absent-students-form select[name='class_id']")
+    wait_ms = int(overview_cfg.get("wait_ms", 1200))
+    include_class_tokens = _resolve_include_class_tokens(overview_cfg, include_classes=include_classes)
+
+    page.goto(overview_url, wait_until="domcontentloaded")
+    page.wait_for_timeout(wait_ms)
+    _ensure_not_cloudflare_blocked(page=page, config=config, selector_cfg=selector_cfg, stage="attendance-overview")
+
+    class_options = _extract_attendance_overview_class_options(page=page, class_select_selector=class_select_selector)
+    if include_class_tokens:
+        class_options = [
+            option
+            for option in class_options
+            if _normalize_class_filter_token(option["class_name"]) in include_class_tokens
+        ]
+
+    if not class_options:
+        raise CollectorError("No classes found on attendance overview page")
+
+    raw_rows: List[Dict[str, Any]] = []
+    for option in class_options:
+        class_url = _build_attendance_overview_class_url(overview_url=overview_url, class_id=option["class_id"])
+        page.goto(class_url, wait_until="domcontentloaded")
+        page.wait_for_timeout(wait_ms)
+        _ensure_not_cloudflare_blocked(
+            page=page,
+            config=config,
+            selector_cfg=selector_cfg,
+            stage="attendance-overview-class",
+        )
+        raw_rows.extend(_extract_rows_from_dom_grid(page=page, class_name_hint=option["class_name"]))
+
+    return _normalize_attendance_overview_rows(raw_rows, source_id="attendance-overview")
+
+
+def _extract_attendance_overview_class_options(page: Any, class_select_selector: str) -> List[Dict[str, str]]:
+    try:
+        options = page.eval_on_selector_all(
+            f"{class_select_selector} option",
+            """els => els.map(el => ({
+                value: el.getAttribute('value') || '',
+                label: (el.textContent || '').replace(/\\s+/g, ' ').trim(),
+                disabled: !!el.disabled,
+                hidden: !!el.hidden
+            }))""",
+        )
+    except Exception:
+        return []
+
+    normalized: List[Dict[str, str]] = []
+    seen: set = set()
+    for item in options:
+        class_id = str(item.get("value", "")).strip()
+        class_name = normalize_class_name(item.get("label", ""))
+        if not class_id or not class_name:
+            continue
+        if class_name.casefold() == "клас":
+            continue
+        key = (class_id, class_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"class_id": class_id, "class_name": class_name})
+    return normalized
+
+
+def _build_attendance_overview_class_url(overview_url: str, class_id: str) -> str:
+    parsed = urlparse(str(overview_url))
+    query = parse_qs(parsed.query)
+    query["class_id"] = [str(class_id)]
+    encoded_query = urlencode([(key, value) for key, values in query.items() for value in values])
+    return parsed._replace(query=encoded_query).geturl()
 
 
 def _collect_journal_records_sequential(
@@ -1388,6 +1519,7 @@ def _extract_class_name_hint(text: Any) -> str:
     patterns = [
         r"журнал оцінок для\s+(.+?)(?:\s*\[[^\]]*\]|$)",
         r"журнал\s+(.+?)(?:\s*\||$)",
+        r"відвідуваність для\s+(.+?)(?:\s*\||$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, token, flags=re.IGNORECASE)
@@ -1587,6 +1719,47 @@ def _normalize_journal_rows(raw_rows: Iterable[Dict[str, Any]], journal_id: str)
     return normalized
 
 
+def _normalize_attendance_overview_rows(raw_rows: Iterable[Dict[str, Any]], source_id: str) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    for row in raw_rows:
+        student_name = str(row.get("student_name", "")).strip()
+        if not student_name:
+            continue
+
+        student_id = str(row.get("student_id", "")).strip() or _synthetic_student_id(student_name)
+        class_name = normalize_class_name(row.get("class_name", ""))
+        date_iso = _normalize_date(row.get("date"))
+        lesson_no = _to_int(row.get("lesson_no"))
+        if not class_name or not date_iso or lesson_no is None:
+            continue
+
+        status = _map_attendance_overview_mark_to_status(row.get("mark"))
+        if status is None:
+            continue
+
+        key = (source_id, class_name, student_id, date_iso, lesson_no)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        normalized.append(
+            {
+                "student_id": student_id,
+                "student_name": student_name,
+                "class_name": class_name,
+                "date": date_iso,
+                "lesson_no": lesson_no,
+                "status": status,
+                "reason_code": "",
+            }
+        )
+
+    normalized.sort(key=lambda r: (r["class_name"], r["student_name"], r["date"], r["lesson_no"]))
+    return normalized
+
+
 def _map_mark_to_status(mark: Any) -> Optional[str]:
     token = str(mark or "").strip().upper()
 
@@ -1595,6 +1768,13 @@ def _map_mark_to_status(mark: Any) -> Optional[str]:
     if token == "ХВ":
         return None
     return "PRESENT"
+
+
+def _map_attendance_overview_mark_to_status(mark: Any) -> Optional[str]:
+    token = str(mark or "").strip().casefold()
+    if not token:
+        return "PRESENT"
+    return "ABSENT"
 
 
 def _normalize_date(value: Any) -> Optional[str]:
@@ -1641,8 +1821,12 @@ def _deduplicate_normalized_records(records: Iterable[Dict[str, Any]]) -> List[D
     return deduped
 
 
-def _write_journal_records_csv(run_dir: Path, records: Iterable[Dict[str, Any]]) -> Path:
-    path = run_dir / "attendance-journal.csv"
+def _write_journal_records_csv(
+    run_dir: Path,
+    records: Iterable[Dict[str, Any]],
+    filename: str = "attendance-journal.csv",
+) -> Path:
+    path = run_dir / filename
     fields = ["student_id", "student_name", "class", "date", "lesson_no", "status", "reason_code"]
 
     with path.open("w", encoding="utf-8", newline="") as handle:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from school_attendance.models import AttendanceRecord
 from school_attendance.parser import parse_attendance_csv
-from school_attendance.reporting import write_report_bundle
+from school_attendance.reporting import write_attendance_10plus_report_bundle, write_report_bundle
 
 
 def _read_xlsx_rows(path: Path):
@@ -225,6 +225,51 @@ class TestParserAndReporting(unittest.TestCase):
             self.assertEqual(
                 ["123", "Іваненко Іван", "7-А", "2026-03-04", "2", "ABSENT", "UNEXCUSED"],
                 detail_rows[1],
+            )
+
+    def test_write_attendance_10plus_report_bundle_writes_ukrainian_csv_and_xlsx(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir) / "out"
+            rows = [
+                {
+                    "student_id": "123",
+                    "student_name": "Іваненко Іван",
+                    "class_name": "7-А",
+                    "period_start": "2026-02-01",
+                    "period_end": "2026-02-14",
+                    "learning_days_absent": 10,
+                }
+            ]
+
+            paths = write_attendance_10plus_report_bundle(out_dir=out_dir, rows=rows)
+
+            csv_path = out_dir / "періоди-відсутності-10-днів-відвідуваність.csv"
+            xlsx_path = out_dir / "періоди-відсутності-10-днів-відвідуваність.xlsx"
+
+            self.assertEqual(str(csv_path), paths["attendance_10plus_csv"])
+            self.assertEqual(str(xlsx_path), paths["attendance_10plus_xlsx"])
+            self.assertTrue(csv_path.exists())
+            self.assertTrue(xlsx_path.exists())
+
+            with csv_path.open(encoding="utf-8") as handle:
+                csv_rows = list(csv.reader(handle))
+            self.assertEqual(
+                ["ID учня", "Учень", "Клас", "Період від", "Період до", "К-сть навчальних днів"],
+                csv_rows[0],
+            )
+            self.assertEqual(
+                ["123", "Іваненко Іван", "7-А", "2026-02-01", "2026-02-14", "10"],
+                csv_rows[1],
+            )
+
+            xlsx_rows = _read_xlsx_rows(xlsx_path)
+            self.assertEqual(
+                ["ID учня", "Учень", "Клас", "Період від", "Період до", "К-сть навчальних днів"],
+                xlsx_rows[0],
+            )
+            self.assertEqual(
+                ["123", "Іваненко Іван", "7-А", "2026-02-01", "2026-02-14", "10"],
+                xlsx_rows[1],
             )
 
     def test_write_report_bundle_contains_ten_plus_columns_and_optional_periods_csv(self):

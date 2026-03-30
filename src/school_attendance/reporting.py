@@ -13,6 +13,28 @@ from xml.sax.saxutils import escape
 from .models import AttendanceRecord
 
 
+def write_attendance_10plus_report_bundle(
+    out_dir: Path,
+    rows: Iterable[Mapping[str, object]],
+) -> Dict[str, str]:
+    """Write dedicated attendance-overview 10+ absence report files."""
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = out_dir / "періоди-відсутності-10-днів-відвідуваність.csv"
+    xlsx_path = out_dir / "періоди-відсутності-10-днів-відвідуваність.xlsx"
+    rows_list = list(rows)
+
+    _write_attendance_10plus_csv(csv_path, rows_list)
+    _write_attendance_10plus_xlsx(xlsx_path, rows_list)
+
+    return {
+        "attendance_10plus_csv": str(csv_path),
+        "attendance_10plus_xlsx": str(xlsx_path),
+    }
+
+
 def write_report_bundle(
     out_dir: Path,
     run_date: date,
@@ -379,6 +401,54 @@ def _write_ten_day_periods_xlsx(path: Path, rows: Iterable[Mapping[str, object]]
         for row in rows
     ]
     _write_xlsx_table(path, headers=headers, rows=xlsx_rows, sheet_title="10+ періоди")
+
+
+def _write_attendance_10plus_csv(path: Path, rows: Iterable[Mapping[str, object]]) -> None:
+    fields = [
+        "ID учня",
+        "Учень",
+        "Клас",
+        "Період від",
+        "Період до",
+        "К-сть навчальних днів",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "ID учня": row.get("student_id", ""),
+                    "Учень": row.get("student_name", ""),
+                    "Клас": row.get("class_name", ""),
+                    "Період від": row.get("period_start", ""),
+                    "Період до": row.get("period_end", ""),
+                    "К-сть навчальних днів": row.get("learning_days_absent", 0),
+                }
+            )
+
+
+def _write_attendance_10plus_xlsx(path: Path, rows: Iterable[Mapping[str, object]]) -> None:
+    headers = [
+        "ID учня",
+        "Учень",
+        "Клас",
+        "Період від",
+        "Період до",
+        "К-сть навчальних днів",
+    ]
+    xlsx_rows = [
+        [
+            row.get("student_id", ""),
+            row.get("student_name", ""),
+            row.get("class_name", ""),
+            row.get("period_start", ""),
+            row.get("period_end", ""),
+            row.get("learning_days_absent", 0),
+        ]
+        for row in rows
+    ]
+    _write_xlsx_table(path, headers=headers, rows=xlsx_rows, sheet_title="10+ відсутність")
 
 
 def _write_class_absence_today_yesterday_csv(path: Path, data: Mapping[str, object]) -> None:
