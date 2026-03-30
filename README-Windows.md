@@ -70,18 +70,43 @@ $env:PYTHONPATH = "src"
 python -m school_attendance.cli run-daily
 ```
 
-## 8) Де дивитись результати
+## 8) Запуск по кліку з ярлика
+
+У репозиторії є 2 готові launcher-файли:
+
+- `windows\run-daily.cmd`
+- `windows\run-attendance-10plus.cmd`
+
+Що вони роблять:
+
+- переходять у папку проєкту
+- активують `.venv`
+- ставлять `PYTHONPATH=src`
+- запускають потрібну команду
+- залишають вікно відкритим після завершення
+
+Як зробити кнопки на робочому столі:
+
+1. Відкрий папку `school_attendance\windows`
+2. Для `run-daily.cmd` натисни правою кнопкою:
+   `Надіслати -> Робочий стіл (створити ярлик)`
+3. Те саме зроби для `run-attendance-10plus.cmd`
+4. За бажанням перейменуй ярлики на:
+   - `Щоденний звіт`
+   - `10+ днів підряд`
+
+## 9) Де дивитись результати
 
 - `out\YYYY-MM-DD\report.md`
 - `out\YYYY-MM-DD\student-absence-summary.csv`
 - `out\YYYY-MM-DD\summary.json`
 - `data\normalized\YYYY-MM-DD\attendance.csv`
 
-## 9) Якщо сесія протухла
+## 10) Якщо сесія протухла
 
 Повтори крок 6 (`bootstrap-session`), потім знову крок 7.
 
-## 10) Варіант для CMD
+## 11) Варіант для CMD
 
 ```cmd
 py -3 -m venv .venv
@@ -92,4 +117,3 @@ set PYTHONPATH=src
 python -m school_attendance.cli bootstrap-session --timeout-seconds 300
 python -m school_attendance.cli run-daily
 ```
-
